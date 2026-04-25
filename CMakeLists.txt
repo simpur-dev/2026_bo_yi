@@ -55,6 +55,8 @@ add_executable(dots_and_boxes ${AI_SOURCES} ${GUI_SOURCES})
 # 自对弈训练数据生成工具（无 SFML 依赖）
 add_executable(selfplay src/selfplay_main.cpp ${AI_SOURCES})
 
+add_executable(evaluate_ai src/evaluate_ai_main.cpp ${AI_SOURCES})
+
 # 链接头文件查找目录
 IF(WIN32)
 target_include_directories(dots_and_boxes PUBLIC 3rdparty/SFML/include)

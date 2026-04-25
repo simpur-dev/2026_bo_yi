@@ -1,0 +1,35 @@
+﻿AlphaZero Baseline Evaluation - Iteration 1
+Date: 2026-04-25
+
+Command:
+  .\build\evaluate_ai.exe 20 heuristic data/models/weights.bin
+
+Players:
+  A = heuristic
+  B = data/models/weights.bin
+
+Result:
+  Games: 40
+  BLACK wins: 18
+  WHITE wins: 22
+  Unfinished: 0
+
+  A wins: 26
+  B wins: 14
+
+  A as BLACK wins: 12 / 20
+  A as WHITE wins: 14 / 20
+
+  B as BLACK wins: 6 / 20
+  B as WHITE wins: 8 / 20
+
+  Avg score BLACK: 12.15
+  Avg score WHITE: 12.85
+
+Conclusion:
+  Iteration-1 neural network does not outperform the heuristic evaluator yet.
+  Color bias in this evaluation is mild (BLACK 18 vs WHITE 22), but model strength is insufficient (heuristic 26 vs NN 14).
+
+Saved artifacts:
+  data/models/weights_iter1_baseline.bin
+  data/evaluations/baseline_iter1_vs_heuristic_20260425.txt

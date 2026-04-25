@@ -1,0 +1,60 @@
+AlphaZero Candidate One-Hot Evaluation
+Date: 2026-04-25
+
+Training data:
+  Teacher: heuristic + PUCT + endgame solver
+  Samples: 17147
+
+Training command:
+  python train/train.py --data_dir data/selfplay --arch mlp --epochs 50 --batch_size 256 --lr 0.001 --device cuda --model_dir data/models --run_name candidate_onehot --policy_temperature 0
+
+Final training metrics:
+  Epoch: 50 / 50
+  Loss: 3.3627
+  Policy loss: 3.2142
+  Value loss: 0.1485
+  PolicyAcc: 0.1594
+  ValueMAE: 0.1668
+  ValueSignAcc: 0.9522
+
+Export command:
+  python train/export_weights.py --model_path data/models/candidate_onehot_best_model.pt --output data/models/candidate_onehot_weights.bin --arch mlp
+
+Evaluation command:
+  .\build\evaluate_ai.exe 20 heuristic data/models/candidate_onehot_weights.bin
+
+Players:
+  A = heuristic
+  B = data/models/candidate_onehot_weights.bin
+
+Result:
+  Games: 40
+  BLACK wins: 12
+  WHITE wins: 28
+  Unfinished: 0
+
+  A wins: 24
+  B wins: 16
+
+  A as BLACK wins: 8 / 20
+  A as WHITE wins: 16 / 20
+
+  B as BLACK wins: 4 / 20
+  B as WHITE wins: 12 / 20
+
+  Avg score BLACK: 9.85
+  Avg score WHITE: 15.15
+
+Comparison:
+  Soft candidate:       heuristic 31 vs candidate 9
+  One-hot candidate:    heuristic 24 vs candidate 16
+  Iter1 NN baseline:    heuristic 26 vs NN 14
+
+Conclusion:
+  One-hot policy targets are clearly better than soft policy targets, but this candidate still fails promotion.
+  The model improved from 9/40 to 16/40 wins, but it still loses to heuristic and remains weak as BLACK (4/20).
+  Training was not converged: full-dataset training PolicyAcc reached only 15.94% after 50 epochs, unlike the 2000-sample one-hot overfit experiment which reached 82.85% after 200 epochs.
+
+Decision:
+  Do not promote candidate_onehot to official weights.bin.
+  Next reasonable experiment is longer full-dataset one-hot training, e.g. 150-200 epochs with scheduler_step 1000, or compare policy_temperature=0.25 vs 0.0 after longer training.

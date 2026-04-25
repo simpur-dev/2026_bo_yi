@@ -1,0 +1,52 @@
+AlphaZero Policy Sharpening Overfit Experiment
+Date: 2026-04-25
+
+Goal:
+  Compare overfitting performance on 2000 samples with different training target policy temperatures.
+
+Baseline command:
+  python train/train.py --data_dir data/selfplay --arch mlp --epochs 200 --batch_size 256 --lr 0.001 --device cuda --model_dir data/models --run_name overfit_2k_mlp --max_samples 2000 --scheduler_step 1000 --eval_interval 10
+
+Temperature 0.25 command:
+  python train/train.py --data_dir data/selfplay --arch mlp --epochs 200 --batch_size 256 --lr 0.001 --device cuda --model_dir data/models --run_name overfit_2k_mlp_temp025 --max_samples 2000 --scheduler_step 1000 --eval_interval 10 --policy_temperature 0.25
+
+One-hot command:
+  python train/train.py --data_dir data/selfplay --arch mlp --epochs 200 --batch_size 256 --lr 0.001 --device cuda --model_dir data/models --run_name overfit_2k_mlp_onehot --max_samples 2000 --scheduler_step 1000 --eval_interval 20 --policy_temperature 0
+
+Results:
+  policy_temperature=1.0:
+    Final PolicyAcc: 0.2280
+    Final Policy loss: 3.2627
+    Final ValueMAE: 0.0573
+    Final ValueSignAcc: 0.9810
+
+  policy_temperature=0.25:
+    Final PolicyAcc: 0.4830
+    Final Policy loss: 2.6482
+    Final ValueMAE: 0.0737
+    Final ValueSignAcc: 0.9775
+
+  policy_temperature=0.0 (one-hot best action):
+    Final PolicyAcc: 0.8285
+    Final Policy loss: 0.8511
+    Final ValueMAE: 0.0765
+    Final ValueSignAcc: 0.9745
+
+Conclusion:
+  MLP capacity is sufficient to memorize 2000 samples when the policy target is sharp.
+  The original soft MCTS visit distributions are too flat for top-1 imitation to become strong: policy_temperature=1.0 only reaches 22.8% top-1 accuracy.
+  Sharpening helps substantially, and one-hot best-action imitation passes the 60% sanity-check threshold by a large margin.
+
+Interpretation:
+  Candidate failure is likely caused by weak/flat policy supervision rather than a basic model or CUDA training failure.
+  For the next full candidate, train with a sharper policy target first. The most direct experiment is policy_temperature=0.0 or 0.25 on the full 17147-sample teacher dataset, then evaluate with evaluate_ai before promotion.
+
+Recommended next experiment:
+  Train full candidate with one-hot policy targets:
+    python train/train.py --data_dir data/selfplay --arch mlp --epochs 50 --batch_size 256 --lr 0.001 --device cuda --model_dir data/models --run_name candidate_onehot --policy_temperature 0
+
+  Export:
+    python train/export_weights.py --model_path data/models/candidate_onehot_best_model.pt --output data/models/candidate_onehot_weights.bin --arch mlp
+
+  Evaluate:
+    .\build\evaluate_ai.exe 20 heuristic data/models/candidate_onehot_weights.bin

@@ -1,0 +1,56 @@
+AlphaZero MLP Overfit Sanity Check
+Date: 2026-04-25
+
+Goal:
+  Use only 2000 samples and train for 200 epochs to check whether training-set policy top-1 accuracy can approach 60%+.
+
+Code changes for diagnostics:
+  train/dataset.py supports max_samples.
+  train/train.py reports PolicyAcc, ValueMAE, and ValueSignAcc.
+
+Command:
+  python train/train.py --data_dir data/selfplay --arch mlp --epochs 200 --batch_size 256 --lr 0.001 --device cuda --model_dir data/models --run_name overfit_2k_mlp --max_samples 2000 --scheduler_step 1000 --eval_interval 10
+
+Final metrics:
+  Epoch: 200 / 200
+  Loss: 3.3108
+  Policy loss: 3.2627
+  Value loss: 0.0481
+  PolicyAcc: 0.2280
+  ValueMAE: 0.0573
+  ValueSignAcc: 0.9810
+
+Target policy statistics on the 2000 samples:
+  Samples: 2000
+  Players: BLACK 1010, WHITE 990
+  Values: -1 997, +1 1003
+  Target max probability average: 0.1646
+  Target max probability median: 0.0925
+  Target max probability max: 0.99
+  Fraction target_max >= 0.3: 0.1305
+  Fraction target_max >= 0.5: 0.0790
+  Fraction target_max >= 0.6: 0.0615
+  Fraction target_max >= 0.8: 0.0345
+  Target entropy average: 2.9675
+  Target entropy median: 3.2754
+
+Top-1 accuracy by target policy sharpness:
+  all samples:       456 / 2000 = 0.2280
+  target_max >= 0.3: 250 / 261  = 0.9579
+  target_max >= 0.5: 156 / 158  = 0.9873
+  target_max >= 0.6: 123 / 123  = 1.0000
+  target_max >= 0.8: 69 / 69   = 1.0000
+
+Conclusion:
+  Overall PolicyAcc did not approach 60%; it only reached 22.8%.
+  However, this does not mean the MLP cannot learn the training data. The teacher policy targets are usually very flat: the average best-action probability is only 0.1646 and only 6.15% of samples have target_max >= 0.6.
+  On sharp/decisive samples, the model memorizes the teacher top action almost perfectly.
+
+Interpretation:
+  Overall top-1 policy accuracy is a misleading primary metric for this dataset because most MCTS visit distributions are broad and ambiguous.
+  The model fits value targets very well (ValueSignAcc 98.1%, ValueMAE 0.0573), and it fits decisive policy targets well.
+  Candidate failure is therefore more likely caused by weak/flat policy targets, ambiguous early-game data, or mismatch between soft imitation loss and actual play strength, rather than a basic inability to train.
+
+Recommended next step:
+  Add better training diagnostics such as target entropy, policy KL/cross-entropy gap, and sharp-policy top-1 accuracy.
+  Consider training/evaluating on sharper targets: lower self-play temperature, stronger visit-count sharpening, or weighting decisive samples more heavily.

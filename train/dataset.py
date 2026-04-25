@@ -25,13 +25,14 @@ ACTION_SIZE = 60
 class DotsAndBoxesDataset(Dataset):
     """AlphaZero 训练数据集"""
 
-    def __init__(self, data_dir, file_pattern="*.jsonl"):
+    def __init__(self, data_dir, file_pattern="*.jsonl", max_samples=0):
         """
         Args:
             data_dir: 数据目录路径
             file_pattern: 文件匹配模式
         """
         self.samples = []
+        self.max_samples = max_samples
         self._load_data(data_dir)
 
     def _load_data(self, data_dir):
@@ -49,6 +50,9 @@ class DotsAndBoxesDataset(Dataset):
                         if line:
                             sample = json.loads(line)
                             self.samples.append(sample)
+                            if self.max_samples > 0 and len(self.samples) >= self.max_samples:
+                                print(f"Loaded {len(self.samples)} samples from {data_dir}")
+                                return
 
         print(f"Loaded {len(self.samples)} samples from {data_dir}")
 
@@ -78,9 +82,9 @@ class DotsAndBoxesDataset(Dataset):
         )
 
 
-def create_dataloader(data_dir, batch_size=256, shuffle=True, num_workers=0):
+def create_dataloader(data_dir, batch_size=256, shuffle=True, num_workers=0, max_samples=0):
     """创建 DataLoader"""
-    dataset = DotsAndBoxesDataset(data_dir)
+    dataset = DotsAndBoxesDataset(data_dir, max_samples=max_samples)
     if len(dataset) == 0:
         return None
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)

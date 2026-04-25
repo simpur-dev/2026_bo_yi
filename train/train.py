@@ -49,7 +49,24 @@ def masked_cross_entropy(policy_logits, target_policy, legal_mask):
     return loss.mean()
 
 
-def train_epoch(model, dataloader, optimizer, device):
+def sharpen_policy(target_policy, legal_mask, temperature):
+    if temperature == 1.0:
+        return target_policy
+
+    if temperature <= 0.0:
+        actions = target_policy.argmax(dim=1, keepdim=True)
+        sharpened = torch.zeros_like(target_policy)
+        sharpened.scatter_(1, actions, 1.0)
+        return sharpened
+
+    probs = target_policy * legal_mask
+    powered = torch.pow(torch.clamp(probs, min=0.0), 1.0 / temperature) * legal_mask
+    denom = powered.sum(dim=1, keepdim=True)
+    fallback = legal_mask / legal_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+    return torch.where(denom > 0.0, powered / denom.clamp_min(1e-12), fallback)
+
+
+def train_epoch(model, dataloader, optimizer, device, policy_temperature):
     """训练一个 epoch"""
     model.train()
     total_loss = 0.0
@@ -62,6 +79,7 @@ def train_epoch(model, dataloader, optimizer, device):
         legal_mask = legal_mask.to(device)
         target_policy = target_policy.to(device)
         target_value = target_value.to(device)
+        target_policy = sharpen_policy(target_policy, legal_mask, policy_temperature)
 
         optimizer.zero_grad()
 
@@ -91,12 +109,12 @@ def train_epoch(model, dataloader, optimizer, device):
     return avg_loss, avg_policy, avg_value
 
 
-def evaluate(model, dataloader, device):
+def evaluate(model, dataloader, device, policy_temperature):
     """评估模型"""
     model.eval()
-    total_loss = 0.0
     total_policy_acc = 0.0
     total_value_err = 0.0
+    total_value_sign_acc = 0.0
     num_samples = 0
 
     with torch.no_grad():
@@ -105,6 +123,7 @@ def evaluate(model, dataloader, device):
             legal_mask = legal_mask.to(device)
             target_policy = target_policy.to(device)
             target_value = target_value.to(device)
+            target_policy = sharpen_policy(target_policy, legal_mask, policy_temperature)
 
             policy_logits, predicted_value = model(board)
             predicted_value = predicted_value.squeeze(-1)
@@ -117,12 +136,16 @@ def evaluate(model, dataloader, device):
 
             # 价值误差
             total_value_err += F.l1_loss(predicted_value, target_value, reduction='sum').item()
+            pred_sign = torch.sign(predicted_value)
+            target_sign = torch.sign(target_value)
+            total_value_sign_acc += (pred_sign == target_sign).float().sum().item()
 
             num_samples += board.size(0)
 
     policy_acc = total_policy_acc / max(num_samples, 1)
     value_err = total_value_err / max(num_samples, 1)
-    return policy_acc, value_err
+    value_sign_acc = total_value_sign_acc / max(num_samples, 1)
+    return policy_acc, value_err, value_sign_acc
 
 
 def main():
@@ -140,6 +163,10 @@ def main():
                         help="网络架构: cnn (ResNet) 或 mlp (轻量MLP)")
     parser.add_argument("--resume", type=str, default=None, help="恢复训练的模型路径")
     parser.add_argument("--run_name", type=str, default="candidate", help="本次训练输出前缀，默认保存为 candidate_*")
+    parser.add_argument("--max_samples", type=int, default=0, help="最多加载多少条样本，0 表示全部")
+    parser.add_argument("--scheduler_step", type=int, default=30, help="学习率衰减步长")
+    parser.add_argument("--eval_interval", type=int, default=10, help="每隔多少 epoch 输出一次训练集指标")
+    parser.add_argument("--policy_temperature", type=float, default=1.0, help="训练目标 policy 温度，低于 1 会锐化分布，0 表示 one-hot")
     args = parser.parse_args()
     run_name = safe_run_name(args.run_name)
 
@@ -150,6 +177,7 @@ def main():
         device = torch.device(args.device)
     print(f"Using device: {device}")
     print(f"Run name: {run_name if run_name else '(official names)'}")
+    print(f"Policy temperature: {args.policy_temperature}")
 
     # 创建模型
     model = create_model(arch=args.arch, device=device)
@@ -162,10 +190,10 @@ def main():
 
     # 优化器
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, foreach=False)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.5)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.scheduler_step, gamma=0.5)
 
     # 数据
-    dataloader = create_dataloader(args.data_dir, batch_size=args.batch_size)
+    dataloader = create_dataloader(args.data_dir, batch_size=args.batch_size, max_samples=args.max_samples)
     if dataloader is None:
         print("No training data found. Please generate data first.")
         return
@@ -176,14 +204,22 @@ def main():
     # 训练循环
     best_loss = float("inf")
     for epoch in range(1, args.epochs + 1):
-        avg_loss, avg_policy, avg_value = train_epoch(model, dataloader, optimizer, device)
+        avg_loss, avg_policy, avg_value = train_epoch(model, dataloader, optimizer, device, args.policy_temperature)
         scheduler.step()
 
-        print(f"Epoch {epoch:3d}/{args.epochs} | "
-              f"Loss: {avg_loss:.4f} | "
-              f"Policy: {avg_policy:.4f} | "
-              f"Value: {avg_value:.4f} | "
-              f"LR: {scheduler.get_last_lr()[0]:.6f}")
+        message = (f"Epoch {epoch:3d}/{args.epochs} | "
+                   f"Loss: {avg_loss:.4f} | "
+                   f"Policy: {avg_policy:.4f} | "
+                   f"Value: {avg_value:.4f} | "
+                   f"LR: {scheduler.get_last_lr()[0]:.6f}")
+
+        if args.eval_interval > 0 and (epoch == 1 or epoch % args.eval_interval == 0 or epoch == args.epochs):
+            policy_acc, value_mae, value_sign_acc = evaluate(model, dataloader, device, args.policy_temperature)
+            message += (f" | PolicyAcc: {policy_acc:.4f} | "
+                        f"ValueMAE: {value_mae:.4f} | "
+                        f"ValueSignAcc: {value_sign_acc:.4f}")
+
+        print(message)
 
         # 保存最佳模型
         if avg_loss < best_loss:

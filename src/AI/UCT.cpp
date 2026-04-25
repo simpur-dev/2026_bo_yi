@@ -364,6 +364,13 @@ void gameTurnMove(Board &CB, int Player, int *status, vector<LOC> &pace)
 {
     // This Function is using for the game's move turn.
 
+    // 游戏已结束，不再执行任何操作
+    if (CB.ifEnd())
+    {
+        *status = 1;
+        return;
+    }
+
     if (USE_ALPHAZERO_AI)
     {
         // AlphaZero 路线：PUCT 搜索 + 精确终局求解器

@@ -14,11 +14,11 @@ import argparse
 import struct
 import torch
 import numpy as np
-from model import DotsAndBoxesNet
+from model import create_model
 
 
-def export_weights(model_path, output_bin, output_desc):
-    model = DotsAndBoxesNet()
+def export_weights(model_path, output_bin, output_desc, arch="mlp"):
+    model = create_model(arch=arch, device="cpu")
     model.load_state_dict(torch.load(model_path, map_location="cpu"))
     model.eval()
 
@@ -61,8 +61,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True, help="PyTorch 模型路径")
     parser.add_argument("--output", type=str, default="../data/models/weights.bin", help="二进制权重输出路径")
+    parser.add_argument("--arch", type=str, default="mlp", choices=["cnn", "mlp"],
+                        help="网络架构: cnn 或 mlp（必须与训练时一致）")
     args = parser.parse_args()
 
     output_bin = args.output
     output_desc = args.output.replace(".bin", "_desc.txt")
-    export_weights(args.model_path, output_bin, output_desc)
+    export_weights(args.model_path, output_bin, output_desc, arch=args.arch)

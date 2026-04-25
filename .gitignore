@@ -7,3 +7,8 @@ chess*.txt
 Doxyfile
 html/
 latex/
+__pycache__/
+data/selfplay/*.jsonl
+data/models/*.pt
+data/models/*.bin
+data/models/*_desc.txt

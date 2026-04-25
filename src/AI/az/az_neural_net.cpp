@@ -69,7 +69,7 @@ bool MLPInference::loadWeights(const std::string &weightPath)
     bool ok = true;
 
     // 按 export_weights.py 导出顺序读取
-    // fc1.weight: (256, 847) -> 217,472 elements
+    // fc1.weight: (256, 847) -> 216,832 elements
     ok = ok && readParam(f, fc1_weight, HIDDEN1 * INPUT_SIZE);
     // fc1.bias: (256)
     ok = ok && readParam(f, fc1_bias, HIDDEN1);
@@ -131,24 +131,24 @@ NetworkOutput MLPInference::forward(const Tensor &input,
     }
 
     // Layer 1: FC(847 -> 256) + ReLU
-    std::vector<float> h1(HIDDEN1);
+    float h1[HIDDEN1];
     linearForward(input.data(), INPUT_SIZE,
                   fc1_weight.data(), fc1_bias.data(),
-                  h1.data(), HIDDEN1);
-    relu(h1.data(), HIDDEN1);
+                  h1, HIDDEN1);
+    relu(h1, HIDDEN1);
 
     // Layer 2: FC(256 -> 128) + ReLU
-    std::vector<float> h2(HIDDEN2);
-    linearForward(h1.data(), HIDDEN1,
+    float h2[HIDDEN2];
+    linearForward(h1, HIDDEN1,
                   fc2_weight.data(), fc2_bias.data(),
-                  h2.data(), HIDDEN2);
-    relu(h2.data(), HIDDEN2);
+                  h2, HIDDEN2);
+    relu(h2, HIDDEN2);
 
     // Policy Head: FC(128 -> 60) + masked softmax
-    std::vector<float> pLogits(AZ_ACTION_SIZE);
-    linearForward(h2.data(), HIDDEN2,
+    float pLogits[AZ_ACTION_SIZE];
+    linearForward(h2, HIDDEN2,
                   policy_weight.data(), policy_bias.data(),
-                  pLogits.data(), AZ_ACTION_SIZE);
+                  pLogits, AZ_ACTION_SIZE);
 
     // 对非法动作施加大负数，然后 softmax
     float maxLogit = -1e30f;

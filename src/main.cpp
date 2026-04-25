@@ -3,9 +3,11 @@
 #include "AI/UCT.h"
 #include "AI/board.h"
 #include "AI/define.h"
+#include "AI/az/az_evaluator.h"
 #include "element/Time.h"
 #include <SFML/Graphics.hpp>
 #include <fstream>
+#include <chrono>
 #include <future>
 #include <thread>
 
@@ -84,6 +86,9 @@ int main()
         config >> BlackName >> WhiteName;
         config.close();
     }
+    // 尝试加载神经网络权重（加载失败则使用启发式评估器）
+    tryLoadNeuralNet("data/models/weights.bin");
+
     initSidebar();
     while (mainWindow.isOpen())
     {
@@ -583,6 +588,11 @@ void AIMove()
 {
     if (!work.valid())
     {
+        if (gameBoard->ifEnd())
+        {
+            game_begin = 0;
+            return;
+        }
         if (nowPlayer == BLACK)
         {
             if (black_ai)
@@ -602,10 +612,18 @@ void AIMove()
             }
         }
     }
-    if (status)
+    if (work.valid() &&
+        work.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
     {
-        work.wait();
         work.get();
+        status = 0;
+        if (ai_steps.empty())
+        {
+            // 游戏已结束，无步可走
+            status = 0;
+            game_begin = 0;
+            return;
+        }
         if (nowPlayer == BLACK)
         {
             black_time.stop();

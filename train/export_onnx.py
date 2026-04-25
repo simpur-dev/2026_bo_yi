@@ -7,11 +7,11 @@
 
 import argparse
 import torch
-from model import DotsAndBoxesNet, CHANNELS, BOARD_SIZE
+from model import create_model, CHANNELS, BOARD_SIZE
 
 
-def export_onnx(model_path, output_path):
-    model = DotsAndBoxesNet()
+def export_onnx(model_path, output_path, arch="mlp"):
+    model = create_model(arch=arch, device="cpu")
     model.load_state_dict(torch.load(model_path, map_location="cpu"))
     model.eval()
 
@@ -39,5 +39,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True, help="PyTorch 模型路径")
     parser.add_argument("--output", type=str, default="../data/models/model.onnx", help="ONNX 输出路径")
+    parser.add_argument("--arch", type=str, default="mlp", choices=["cnn", "mlp"],
+                        help="网络架构: cnn 或 mlp")
     args = parser.parse_args()
-    export_onnx(args.model_path, args.output)
+    export_onnx(args.model_path, args.output, arch=args.arch)

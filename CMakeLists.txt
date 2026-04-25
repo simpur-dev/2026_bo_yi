@@ -23,45 +23,37 @@ ENDIF()
 find_package(SFML 2.5 COMPONENTS
         system window graphics REQUIRED)
 find_package(nowide)
-# 声明 SOURCES
-file(GLOB_RECURSE SOURCES
-        src/main.cpp
+# AI 核心源文件（GUI 和 SelfPlay 共享）
+set(AI_SOURCES
         src/AI/assess.cpp
-        src/AI/assess.h
         src/AI/board.cpp
-        src/AI/board.h
-        src/AI/define.h
         src/AI/Node.cpp
-        src/AI/Node.h
         src/AI/UCT.cpp
-        src/AI/UCT.h
-        src/AI/az/az_types.h
-        src/AI/az/az_action.h
         src/AI/az/az_action.cpp
-        src/AI/az/az_encoder.h
         src/AI/az/az_encoder.cpp
-        src/AI/az/az_evaluator.h
         src/AI/az/az_evaluator.cpp
-        src/AI/az/az_node.h
         src/AI/az/az_node.cpp
-        src/AI/az/az_mcts.h
         src/AI/az/az_mcts.cpp
-        src/AI/az/az_move.h
         src/AI/az/az_move.cpp
-        src/AI/az/az_neural_net.h
         src/AI/az/az_neural_net.cpp
+        src/AI/az/az_selfplay.cpp
+        )
+
+# GUI 主程序源文件
+set(GUI_SOURCES
+        src/main.cpp
         src/element/Time.cpp
-        src/element/Time.h
         src/CJSON/cJSON.c
-        src/CJSON/cJSON.h
         src/CJSON/datarecorder.cpp
-        src/CJSON/datarecorder.h
         )
 
 # 如果想要编译出来的程序不带控制台，使用这个
-#add_executable(dots_and_boxes WIN32 ${SOURCES})
+#add_executable(dots_and_boxes WIN32 ${AI_SOURCES} ${GUI_SOURCES})
 # 如果想要编译出来的程序带控制台，使用这个
-add_executable(dots_and_boxes ${SOURCES})
+add_executable(dots_and_boxes ${AI_SOURCES} ${GUI_SOURCES})
+
+# 自对弈训练数据生成工具（无 SFML 依赖）
+add_executable(selfplay src/selfplay_main.cpp ${AI_SOURCES})
 
 # 链接头文件查找目录
 IF(WIN32)

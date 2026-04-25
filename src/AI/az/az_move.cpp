@@ -6,6 +6,7 @@
 #include "../assess.h"
 #include "../define.h"
 #include <iostream>
+#include <chrono>
 
 // 前向声明后期决策函数（定义在 UCT.cpp 中）
 void latterSituationMove(Board &CB, int Player, std::vector<LOC> &pace);
@@ -23,7 +24,12 @@ void AlphaZeroMove(Board &board, int player, std::vector<LOC> &pace)
     if (isLatter)
     {
         // 终局：使用现有精确终局求解器
+        std::cerr << "[AZ] Entering endgame solver...\n";
+        auto t0 = std::chrono::steady_clock::now();
         latterSituationMove(board, player, pace);
+        auto t1 = std::chrono::steady_clock::now();
+        int ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
+        std::cerr << "[AZ] Endgame solver done, " << ms << "ms, " << pace.size() << " moves\n";
         return;
     }
 
@@ -34,6 +40,8 @@ void AlphaZeroMove(Board &board, int player, std::vector<LOC> &pace)
 
     if (deadCircle || deadChain)
     {
+        std::cerr << "[AZ] Dead chain/circle detected, handling...\n";
+        auto dcStart = std::chrono::steady_clock::now();
         int sacrificeBoxNum = deadCircle ? 4 : 2;
 
         // 模拟全吃后，评估理性状态

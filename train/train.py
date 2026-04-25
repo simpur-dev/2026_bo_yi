@@ -123,6 +123,8 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3, help="学习率")
     parser.add_argument("--weight_decay", type=float, default=1e-4, help="L2 正则化")
     parser.add_argument("--device", type=str, default="auto", help="设备: auto/cpu/cuda")
+    parser.add_argument("--arch", type=str, default="mlp", choices=["cnn", "mlp"],
+                        help="网络架构: cnn (ResNet) 或 mlp (轻量MLP)")
     parser.add_argument("--resume", type=str, default=None, help="恢复训练的模型路径")
     args = parser.parse_args()
 
@@ -134,7 +136,7 @@ def main():
     print(f"Using device: {device}")
 
     # 创建模型
-    model = create_model(device)
+    model = create_model(arch=args.arch, device=device)
     if args.resume:
         model.load_state_dict(torch.load(args.resume, map_location=device))
         print(f"Resumed from {args.resume}")

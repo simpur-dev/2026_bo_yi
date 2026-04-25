@@ -15,7 +15,7 @@ import json
 import os
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 
 BOARD_SIZE = 11
 CHANNELS = 7
@@ -89,3 +89,21 @@ def create_dataloader(data_dir, batch_size=256, shuffle=True, num_workers=0, max
         return None
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
     return loader
+
+
+def create_dataloaders(data_dir, batch_size=256, shuffle=True, num_workers=0, max_samples=0, val_split=0.0, split_seed=2026):
+    dataset = DotsAndBoxesDataset(data_dir, max_samples=max_samples)
+    if len(dataset) == 0:
+        return None, None
+    if val_split <= 0.0:
+        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers), None
+
+    val_size = int(len(dataset) * val_split)
+    val_size = max(1, min(val_size, len(dataset) - 1))
+    train_size = len(dataset) - val_size
+    generator = torch.Generator().manual_seed(split_seed)
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size], generator=generator)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    print(f"Train samples: {train_size}  Val samples: {val_size}")
+    return train_loader, val_loader

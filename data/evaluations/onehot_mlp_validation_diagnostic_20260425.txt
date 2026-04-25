@@ -1,0 +1,55 @@
+AlphaZero One-Hot MLP Validation Diagnostic
+Date: 2026-04-25
+
+Goal:
+  Check whether longer one-hot MLP training improves generalization or only memorizes the training set.
+
+Code changes:
+  train/dataset.py:
+    Added create_dataloaders with train/validation split support.
+
+  train/train.py:
+    Added --val_split and --split_seed.
+    Training output now reports TrainPolicyAcc / TrainValueMAE / TrainValueSignAcc.
+    When validation split is enabled, output also reports ValLoss / ValPolicy / ValValue / ValPolicyAcc / ValValueMAE / ValValueSignAcc.
+
+Diagnostic training command:
+  python train/train.py --data_dir data/selfplay --arch mlp --epochs 80 --batch_size 256 --lr 0.001 --device cuda --model_dir data/models --run_name valcheck_onehot_mlp --policy_temperature 0 --scheduler_step 1000 --eval_interval 10 --val_split 0.1 --split_seed 2026
+
+Dataset split:
+  Total samples: 17147
+  Train samples: 15433
+  Val samples: 1714
+
+Checkpoint metrics:
+  epoch | train_acc | val_acc | train_policy | val_policy | train_mae | val_mae | train_sign | val_sign
+     10 |    0.0580 |  0.0414 |       3.6192 |     3.6525 |    0.7407 |  0.7815 |     0.7246 |   0.6814
+     20 |    0.0842 |  0.0484 |       3.5294 |     3.6523 |    0.3869 |  0.4628 |     0.8868 |   0.8425
+     30 |    0.1077 |  0.0496 |       3.4088 |     3.6627 |    0.2679 |  0.3523 |     0.9211 |   0.8693
+     40 |    0.1433 |  0.0455 |       3.2751 |     3.6894 |    0.2095 |  0.3112 |     0.9410 |   0.8781
+     50 |    0.1707 |  0.0543 |       3.1631 |     3.7292 |    0.1916 |  0.3025 |     0.9354 |   0.8786
+     60 |    0.1935 |  0.0502 |       3.0555 |     3.8056 |    0.1718 |  0.2888 |     0.9500 |   0.8886
+     70 |    0.2199 |  0.0496 |       2.9490 |     3.8983 |    0.1615 |  0.2894 |     0.9497 |   0.8792
+     80 |    0.2518 |  0.0455 |       2.8515 |     3.9980 |    0.1497 |  0.2797 |     0.9525 |   0.8833
+
+Key finding:
+  Training policy top-1 accuracy rises steadily from 5.8% to 25.18%.
+  Validation policy top-1 accuracy stays around 4-5% and does not improve.
+  Training policy loss falls from 3.6192 to 2.8515.
+  Validation policy loss rises from 3.6525 to 3.9980 after early epochs.
+
+Interpretation:
+  The MLP is memorizing one-hot teacher labels from the training split instead of learning a policy that generalizes to held-out self-play positions.
+  This explains why the long one-hot model had better training PolicyAcc but worse arena strength than the 50-epoch one-hot model.
+  Lower training loss is not a reliable checkpoint-selection criterion for this setup.
+
+Conclusion:
+  Stop selecting MLP checkpoints by train loss alone.
+  Do not simply train one-hot MLP longer.
+  The current MLP + one-hot imitation pipeline overfits quickly and generalizes poorly.
+
+Recommended next steps:
+  1. Use validation metrics when deciding whether a model is worth arena evaluation.
+  2. Evaluate earlier checkpoints by arena, because best play strength may occur before train overfit deepens.
+  3. Train the existing CNN architecture with the same validation split to check whether spatial inductive bias improves validation PolicyAcc.
+  4. If CNN generalizes better, consider either using CNN for training/evaluation research or later adding CNN inference support.

@@ -20,6 +20,19 @@ from model import DotsAndBoxesNet, create_model, ACTION_SIZE
 from dataset import create_dataloader
 
 
+def safe_run_name(name):
+    name = (name or "").strip()
+    if not name:
+        return ""
+    return "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in name)
+
+
+def named_model_path(model_dir, run_name, filename):
+    if run_name:
+        return os.path.join(model_dir, f"{run_name}_{filename}")
+    return os.path.join(model_dir, filename)
+
+
 def masked_cross_entropy(policy_logits, target_policy, legal_mask):
     """
     计算带合法动作 mask 的交叉熵损失
@@ -126,7 +139,9 @@ def main():
     parser.add_argument("--arch", type=str, default="mlp", choices=["cnn", "mlp"],
                         help="网络架构: cnn (ResNet) 或 mlp (轻量MLP)")
     parser.add_argument("--resume", type=str, default=None, help="恢复训练的模型路径")
+    parser.add_argument("--run_name", type=str, default="candidate", help="本次训练输出前缀，默认保存为 candidate_*")
     args = parser.parse_args()
+    run_name = safe_run_name(args.run_name)
 
     # 设备
     if args.device == "auto":
@@ -134,6 +149,7 @@ def main():
     else:
         device = torch.device(args.device)
     print(f"Using device: {device}")
+    print(f"Run name: {run_name if run_name else '(official names)'}")
 
     # 创建模型
     model = create_model(arch=args.arch, device=device)
@@ -172,17 +188,17 @@ def main():
         # 保存最佳模型
         if avg_loss < best_loss:
             best_loss = avg_loss
-            save_path = os.path.join(args.model_dir, "best_model.pt")
+            save_path = named_model_path(args.model_dir, run_name, "best_model.pt")
             torch.save(model.state_dict(), save_path)
 
         # 定期保存检查点
         if epoch % 10 == 0:
-            save_path = os.path.join(args.model_dir, f"model_epoch_{epoch}.pt")
+            save_path = named_model_path(args.model_dir, run_name, f"model_epoch_{epoch}.pt")
             torch.save(model.state_dict(), save_path)
             print(f"  Saved checkpoint: {save_path}")
 
     # 最终保存
-    final_path = os.path.join(args.model_dir, "final_model.pt")
+    final_path = named_model_path(args.model_dir, run_name, "final_model.pt")
     torch.save(model.state_dict(), final_path)
     print(f"Training complete. Final model saved to {final_path}")
 

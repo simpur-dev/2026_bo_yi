@@ -17,6 +17,11 @@ import numpy as np
 from model import create_model
 
 
+def is_official_weight_path(path):
+    normalized = path.replace("\\", "/")
+    return normalized.endswith("data/models/weights.bin") or normalized.endswith("../data/models/weights.bin")
+
+
 def export_weights(model_path, output_bin, output_desc, arch="mlp"):
     model = create_model(arch=arch, device="cpu")
     model.load_state_dict(torch.load(model_path, map_location="cpu"))
@@ -60,11 +65,14 @@ def export_weights(model_path, output_bin, output_desc, arch="mlp"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True, help="PyTorch 模型路径")
-    parser.add_argument("--output", type=str, default="../data/models/weights.bin", help="二进制权重输出路径")
+    parser.add_argument("--output", type=str, default="../data/models/candidate_weights.bin", help="二进制权重输出路径")
     parser.add_argument("--arch", type=str, default="mlp", choices=["cnn", "mlp"],
                         help="网络架构: cnn 或 mlp（必须与训练时一致）")
+    parser.add_argument("--promote", action="store_true", help="允许导出覆盖正式 weights.bin")
     args = parser.parse_args()
 
     output_bin = args.output
+    if is_official_weight_path(output_bin) and not args.promote:
+        raise SystemExit("Refusing to overwrite official weights.bin without --promote")
     output_desc = args.output.replace(".bin", "_desc.txt")
     export_weights(args.model_path, output_bin, output_desc, arch=args.arch)

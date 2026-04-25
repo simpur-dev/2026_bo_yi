@@ -961,6 +961,24 @@ ONNX Runtime 或 LibTorch 可能带来配置复杂度。
 
 不要一开始就训练模型。第一步应先把 PUCT 框架接入当前项目，并使用启发式 evaluator 跑通。
 
+当前自对弈迭代阶段采用 candidate 晋级流程：
+
+```text
+1. 使用强 baseline（heuristic + PUCT + 终局求解器）生成训练数据。
+2. 训练候选模型，默认输出 candidate_*，不覆盖正式 best_model.pt / weights.bin。
+3. 导出候选权重为 candidate_weights.bin。
+4. 使用 evaluate_ai 交换先后手评估 candidate vs baseline。
+5. 只有 candidate 通过评估，才使用 --promote 导出/替换正式 weights.bin。
+```
+
+常用命令：
+
+```bash
+python train/train.py --data_dir data/selfplay --arch mlp --epochs 50 --batch_size 256 --device cuda --model_dir data/models --run_name candidate
+python train/export_weights.py --model_path data/models/candidate_best_model.pt --output data/models/candidate_weights.bin --arch mlp
+.\build\evaluate_ai.exe 20 heuristic data/models/candidate_weights.bin
+```
+
 ---
 
 ## 19. 最终版本目标

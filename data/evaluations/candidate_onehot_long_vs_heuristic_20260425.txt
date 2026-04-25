@@ -1,0 +1,68 @@
+AlphaZero Candidate One-Hot Long Training Evaluation
+Date: 2026-04-25
+
+Training data:
+  Teacher: heuristic + PUCT + endgame solver
+  Samples: 17147
+
+Initial model:
+  data/models/candidate_onehot_final_model.pt
+
+Training command:
+  python train/train.py --data_dir data/selfplay --arch mlp --epochs 150 --batch_size 256 --lr 0.001 --device cuda --model_dir data/models --run_name candidate_onehot_long --resume data/models/candidate_onehot_final_model.pt --policy_temperature 0 --scheduler_step 1000 --eval_interval 10
+
+Final training metrics:
+  Epoch: 150 / 150
+  Loss: 2.3181
+  Policy loss: 2.2011
+  Value loss: 0.1169
+  PolicyAcc: 0.4290
+  ValueMAE: 0.1360
+  ValueSignAcc: 0.9486
+
+Export command:
+  python train/export_weights.py --model_path data/models/candidate_onehot_long_best_model.pt --output data/models/candidate_onehot_long_weights.bin --arch mlp
+
+Evaluation command:
+  .\build\evaluate_ai.exe 20 heuristic data/models/candidate_onehot_long_weights.bin
+
+Players:
+  A = heuristic
+  B = data/models/candidate_onehot_long_weights.bin
+
+Result:
+  Games: 40
+  BLACK wins: 16
+  WHITE wins: 24
+  Unfinished: 0
+
+  A wins: 30
+  B wins: 10
+
+  A as BLACK wins: 13 / 20
+  A as WHITE wins: 17 / 20
+
+  B as BLACK wins: 3 / 20
+  B as WHITE wins: 7 / 20
+
+  Avg score BLACK: 11.35
+  Avg score WHITE: 13.65
+
+Comparison:
+  Soft candidate:             heuristic 31 vs candidate 9
+  Iter1 NN baseline:          heuristic 26 vs NN 14
+  One-hot candidate 50 epoch: heuristic 24 vs candidate 16
+  One-hot long candidate:     heuristic 30 vs candidate 10
+
+Conclusion:
+  Candidate one-hot long failed promotion.
+  Although training PolicyAcc improved from 15.94% to 42.90%, playing strength got worse compared with the 50-epoch one-hot candidate.
+  This indicates that lower training loss / higher training-set top-1 imitation does not necessarily improve actual play strength with the current teacher data and MLP architecture.
+
+Decision:
+  Do not promote candidate_onehot_long to official weights.bin.
+  Keep official data/models/weights.bin unchanged.
+
+Next recommendation:
+  Stop simply extending MLP one-hot training.
+  Investigate validation split / overfitting and checkpoint selection by arena evaluation, or train/evaluate the existing CNN architecture in Python to test whether MLP capacity or inductive bias is the limiting factor.

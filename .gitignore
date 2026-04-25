@@ -1,0 +1,9 @@
+*.exe
+.idea/
+build/
+cmake-build-*/
+.cache/
+chess*.txt
+Doxyfile
+html/
+latex/

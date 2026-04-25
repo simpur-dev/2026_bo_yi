@@ -1,0 +1,57 @@
+AlphaZero Confidence-Filtered Temperature 0.25 MLP Validation Diagnostic
+Date: 2026-04-25
+
+Goal:
+  Compare confidence-filtered one-hot training with confidence-filtered moderately sharpened policy targets.
+
+Command:
+  python train/train.py --data_dir data/selfplay --arch mlp --epochs 100 --batch_size 256 --lr 0.001 --device cuda --model_dir data/models --run_name valcheck_temp025_mlp_conf03 --policy_temperature 0.25 --scheduler_step 1000 --eval_interval 10 --val_split 0.1 --split_seed 2026 --min_policy_confidence 0.3
+
+Dataset split after filtering:
+  Total samples: 2240
+  Train samples: 2016
+  Val samples: 224
+
+Checkpoint metrics:
+  epoch | train_acc | val_acc | train_policy | val_policy | train_mae | val_mae | train_sign | val_sign
+     10 |    0.1394 |  0.1027 |       2.9906 |     3.0822 |    0.7462 |  0.8101 |     0.7168 |   0.6786
+     20 |    0.1691 |  0.1250 |       2.8933 |     3.0661 |    0.6667 |  0.7752 |     0.7788 |   0.6652
+     30 |    0.2153 |  0.1205 |       2.7410 |     3.0675 |    0.5533 |  0.7250 |     0.8289 |   0.6830
+     40 |    0.2961 |  0.1250 |       2.5045 |     3.1024 |    0.4099 |  0.6524 |     0.9132 |   0.7054
+     50 |    0.3943 |  0.1161 |       2.2331 |     3.1944 |    0.3056 |  0.6173 |     0.9554 |   0.7321
+     60 |    0.4454 |  0.1161 |       1.9944 |     3.3487 |    0.1806 |  0.5642 |     0.9826 |   0.7500
+     70 |    0.5521 |  0.1161 |       1.7423 |     3.5213 |    0.1409 |  0.5358 |     0.9871 |   0.7500
+     80 |    0.6121 |  0.1250 |       1.5264 |     3.6748 |    0.1015 |  0.5384 |     0.9940 |   0.7411
+     90 |    0.7024 |  0.1027 |       1.3093 |     3.8999 |    0.0846 |  0.5354 |     0.9950 |   0.7455
+    100 |    0.7624 |  0.1071 |       1.1303 |     4.1445 |    0.0713 |  0.5127 |     0.9950 |   0.7679
+
+Comparison:
+  Unfiltered MLP one-hot:
+    Epoch 80 ValPolicyAcc: about 0.0455
+
+  Confidence-filtered MLP one-hot, min_policy_confidence=0.3:
+    Best observed ValPolicyAcc: 0.1295 at epoch 90
+    Epoch 100 ValPolicy: 4.5828
+
+  Confidence-filtered MLP temp=0.25, min_policy_confidence=0.3:
+    Best observed ValPolicyAcc: 0.1250 at epochs 20/40/80
+    Epoch 100 ValPolicy: 4.1445
+
+Key finding:
+  Moderate sharpening with policy_temperature=0.25 does not improve validation top-1 accuracy over one-hot on confidence-filtered data.
+  It does keep validation policy loss slightly lower at late epochs, but the difference is not enough to solve generalization.
+  Confidence filtering remains the main source of improvement: validation top-1 increases from about 4-5% to about 10-13%.
+
+Interpretation:
+  The current dataset contains too few clear/high-confidence samples, and both one-hot and moderately sharpened targets still overfit.
+  The next bottleneck is data quality/quantity, not simply target temperature.
+
+Conclusion:
+  min_policy_confidence=0.3 is useful but insufficient alone.
+  policy_temperature=0.25 is not clearly better than one-hot for validation top-1 on the filtered subset.
+
+Recommended next steps:
+  1. Generate more high-confidence teacher data, either more games or more simulations per move.
+  2. Add sample weighting by policy confidence/entropy rather than hard filtering.
+  3. Add game-level validation split to check whether random-sample split is hiding game correlation effects.
+  4. If training another candidate, select checkpoints by validation or arena evaluation, not train loss.

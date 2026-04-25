@@ -1,5 +1,7 @@
 #include "Node.h"
 #include "board.h"
+#include "az/az_types.h"
+#include "az/az_move.h"
 #include <mutex>
 #include <random>
 #include <thread>

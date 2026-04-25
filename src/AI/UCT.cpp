@@ -364,15 +364,24 @@ void gameTurnMove(Board &CB, int Player, int *status, vector<LOC> &pace)
 {
     // This Function is using for the game's move turn.
 
-    Board Test = CB;
-    Test.eatAllCTypeBoxes(Player);
-    bool LatterSituation = (Test.getFilterMoveNum() == 0);
-    if (!LatterSituation)
-        UCTMoveWithSacrifice(CB, Player, pace);
-    else //也就是后期局面了
+    if (USE_ALPHAZERO_AI)
     {
-        //也就是Filter都已经无能为力的情况下，只有LongChain,Circle,PreCircle
-        latterSituationMove(CB, Player, pace); //**记录步伐
+        // AlphaZero 路线：PUCT 搜索 + 精确终局求解器
+        AlphaZeroMove(CB, Player, pace);
+    }
+    else
+    {
+        // 旧版 UCT 路线
+        Board Test = CB;
+        Test.eatAllCTypeBoxes(Player);
+        bool LatterSituation = (Test.getFilterMoveNum() == 0);
+        if (!LatterSituation)
+            UCTMoveWithSacrifice(CB, Player, pace);
+        else //也就是后期局面了
+        {
+            //也就是Filter都已经无能为力的情况下，只有LongChain,Circle,PreCircle
+            latterSituationMove(CB, Player, pace); //**记录步伐
+        }
     }
     *status = 1;
 }

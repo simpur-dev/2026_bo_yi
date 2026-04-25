@@ -35,6 +35,19 @@ file(GLOB_RECURSE SOURCES
         src/AI/Node.h
         src/AI/UCT.cpp
         src/AI/UCT.h
+        src/AI/az/az_types.h
+        src/AI/az/az_action.h
+        src/AI/az/az_action.cpp
+        src/AI/az/az_encoder.h
+        src/AI/az/az_encoder.cpp
+        src/AI/az/az_evaluator.h
+        src/AI/az/az_evaluator.cpp
+        src/AI/az/az_node.h
+        src/AI/az/az_node.cpp
+        src/AI/az/az_mcts.h
+        src/AI/az/az_mcts.cpp
+        src/AI/az/az_move.h
+        src/AI/az/az_move.cpp
         src/element/Time.cpp
         src/element/Time.h
         src/CJSON/cJSON.c

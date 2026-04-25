@@ -25,7 +25,7 @@ ACTION_SIZE = 60
 class DotsAndBoxesDataset(Dataset):
     """AlphaZero 训练数据集"""
 
-    def __init__(self, data_dir, file_pattern="*.jsonl", max_samples=0):
+    def __init__(self, data_dir, file_pattern="*.jsonl", max_samples=0, min_policy_confidence=0.0):
         """
         Args:
             data_dir: 数据目录路径
@@ -33,6 +33,7 @@ class DotsAndBoxesDataset(Dataset):
         """
         self.samples = []
         self.max_samples = max_samples
+        self.min_policy_confidence = min_policy_confidence
         self._load_data(data_dir)
 
     def _load_data(self, data_dir):
@@ -41,6 +42,7 @@ class DotsAndBoxesDataset(Dataset):
             print(f"Warning: data directory {data_dir} does not exist")
             return
 
+        filtered = 0
         for filename in sorted(os.listdir(data_dir)):
             if filename.endswith(".jsonl"):
                 filepath = os.path.join(data_dir, filename)
@@ -49,12 +51,15 @@ class DotsAndBoxesDataset(Dataset):
                         line = line.strip()
                         if line:
                             sample = json.loads(line)
+                            if self.min_policy_confidence > 0.0 and max(sample["policy"]) < self.min_policy_confidence:
+                                filtered += 1
+                                continue
                             self.samples.append(sample)
                             if self.max_samples > 0 and len(self.samples) >= self.max_samples:
-                                print(f"Loaded {len(self.samples)} samples from {data_dir}")
+                                print(f"Loaded {len(self.samples)} samples from {data_dir}, filtered {filtered}")
                                 return
 
-        print(f"Loaded {len(self.samples)} samples from {data_dir}")
+        print(f"Loaded {len(self.samples)} samples from {data_dir}, filtered {filtered}")
 
     def __len__(self):
         return len(self.samples)
@@ -82,17 +87,17 @@ class DotsAndBoxesDataset(Dataset):
         )
 
 
-def create_dataloader(data_dir, batch_size=256, shuffle=True, num_workers=0, max_samples=0):
+def create_dataloader(data_dir, batch_size=256, shuffle=True, num_workers=0, max_samples=0, min_policy_confidence=0.0):
     """创建 DataLoader"""
-    dataset = DotsAndBoxesDataset(data_dir, max_samples=max_samples)
+    dataset = DotsAndBoxesDataset(data_dir, max_samples=max_samples, min_policy_confidence=min_policy_confidence)
     if len(dataset) == 0:
         return None
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
     return loader
 
 
-def create_dataloaders(data_dir, batch_size=256, shuffle=True, num_workers=0, max_samples=0, val_split=0.0, split_seed=2026):
-    dataset = DotsAndBoxesDataset(data_dir, max_samples=max_samples)
+def create_dataloaders(data_dir, batch_size=256, shuffle=True, num_workers=0, max_samples=0, val_split=0.0, split_seed=2026, min_policy_confidence=0.0):
+    dataset = DotsAndBoxesDataset(data_dir, max_samples=max_samples, min_policy_confidence=min_policy_confidence)
     if len(dataset) == 0:
         return None, None
     if val_split <= 0.0:

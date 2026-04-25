@@ -1,0 +1,72 @@
+AlphaZero Confidence-Filtered MLP Validation Diagnostic
+Date: 2026-04-25
+
+Goal:
+  Test whether filtering to clearer teacher policy targets improves validation generalization.
+
+Code changes:
+  train/dataset.py:
+    Added min_policy_confidence filtering. Samples with max(policy) below the threshold are skipped.
+
+  train/train.py:
+    Added --min_policy_confidence.
+
+Sample counts:
+  min_policy_confidence=0.3: loaded 2240 samples, filtered 14907
+  min_policy_confidence=0.5: loaded 1316 samples, filtered 15831
+  min_policy_confidence=0.6: loaded 990 samples, filtered 16157
+
+Diagnostic command:
+  python train/train.py --data_dir data/selfplay --arch mlp --epochs 100 --batch_size 256 --lr 0.001 --device cuda --model_dir data/models --run_name valcheck_onehot_mlp_conf03 --policy_temperature 0 --scheduler_step 1000 --eval_interval 10 --val_split 0.1 --split_seed 2026 --min_policy_confidence 0.3
+
+Dataset split after filtering:
+  Total samples: 2240
+  Train samples: 2016
+  Val samples: 224
+
+Checkpoint metrics:
+  epoch | train_acc | val_acc | train_policy | val_policy | train_mae | val_mae | train_sign | val_sign
+     10 |    0.1374 |  0.0982 |       2.9871 |     3.0813 |    0.7758 |  0.8329 |     0.7272 |   0.6696
+     20 |    0.1791 |  0.1027 |       2.8815 |     3.0928 |    0.6497 |  0.7601 |     0.7882 |   0.6786
+     30 |    0.2316 |  0.0982 |       2.7106 |     3.1171 |    0.5754 |  0.7494 |     0.8373 |   0.6652
+     40 |    0.3269 |  0.0982 |       2.4365 |     3.1992 |    0.3934 |  0.6615 |     0.9271 |   0.7321
+     50 |    0.3958 |  0.1205 |       2.1497 |     3.3926 |    0.3181 |  0.6644 |     0.9306 |   0.7143
+     60 |    0.4762 |  0.1205 |       1.8572 |     3.5687 |    0.1923 |  0.5811 |     0.9812 |   0.7545
+     70 |    0.5709 |  0.1161 |       1.5735 |     3.7936 |    0.1258 |  0.5362 |     0.9916 |   0.7634
+     80 |    0.6458 |  0.1116 |       1.3218 |     4.0405 |    0.0972 |  0.5312 |     0.9931 |   0.7500
+     90 |    0.7153 |  0.1295 |       1.1222 |     4.2739 |    0.1536 |  0.5218 |     0.9702 |   0.7500
+    100 |    0.7937 |  0.1205 |       0.8925 |     4.5828 |    0.0654 |  0.5137 |     0.9936 |   0.7589
+
+Comparison with unfiltered MLP one-hot validation diagnostic:
+  Unfiltered MLP:
+    Total samples: 17147
+    Epoch 80 TrainPolicyAcc: 0.2518
+    Epoch 80 ValPolicyAcc:   0.0455
+    Epoch 80 ValPolicy:      3.9980
+
+  Confidence-filtered MLP, min_policy_confidence=0.3:
+    Total samples: 2240
+    Epoch 80 TrainPolicyAcc: 0.6458
+    Epoch 80 ValPolicyAcc:   0.1116
+    Epoch 80 ValPolicy:      4.0405
+    Best observed ValPolicyAcc: 0.1295 at epoch 90
+
+Key finding:
+  Confidence filtering improves validation top-1 policy accuracy from about 4-5% to about 10-13%.
+  This supports the hypothesis that very flat teacher policies are harmful training targets.
+  However, the model still overfits: training accuracy keeps rising to 79.37%, while validation accuracy remains low and validation policy loss rises from 3.08 to 4.58.
+
+Interpretation:
+  Filtering clear teacher positions helps, but is not sufficient to produce strong generalization by itself.
+  The filtered dataset is much smaller, so overfitting becomes easier.
+  A candidate trained only on these samples would likely need regularization, early stopping, or additional high-confidence data.
+
+Conclusion:
+  min_policy_confidence is a useful diagnostic/training control and should remain available.
+  Do not promote or rely on a confidence-filtered model yet.
+
+Recommended next steps:
+  1. Try soft/moderately sharpened targets on filtered samples, e.g. --policy_temperature 0.25 with --min_policy_confidence 0.3.
+  2. Generate more high-confidence teacher data, preferably with more simulations or lower move-selection temperature.
+  3. Add sample weighting by confidence instead of hard filtering, to avoid throwing away too much data.
+  4. Consider evaluating early checkpoints around the best validation accuracy, but only as a diagnostic, not promotion.

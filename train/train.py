@@ -145,7 +145,7 @@ def main():
     print(f"Model parameters: {param_count:,}")
 
     # 优化器
-    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, foreach=False)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.5)
 
     # 数据

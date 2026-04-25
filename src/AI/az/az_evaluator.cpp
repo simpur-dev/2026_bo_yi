@@ -1,9 +1,11 @@
 #include "az_evaluator.h"
 #include "az_action.h"
+#include "az_encoder.h"
 #include "../define.h"
 #include <cmath>
 #include <algorithm>
 #include <numeric>
+#include <iostream>
 
 // ========== 全局评估器管理 ==========
 
@@ -125,4 +127,45 @@ NetworkOutput HeuristicEvaluator::evaluate(const Board &board, int currentPlayer
     output.value = std::clamp(scoreDiff + 0.1f * safeRatio, -1.0f, 1.0f);
 
     return output;
+}
+
+// ========== 神经网络评估器实现 ==========
+
+bool NeuralNetEvaluator::loadModel(const std::string &weightPath)
+{
+    return mlp.loadWeights(weightPath);
+}
+
+NetworkOutput NeuralNetEvaluator::evaluate(const Board &board, int currentPlayer)
+{
+    // 编码棋盘
+    Tensor input = encodeBoard(board, currentPlayer);
+
+    // 获取合法动作 mask
+    auto legalMask = getLegalMask(board);
+
+    // MLP 前向推理（内部已做 masked softmax）
+    return mlp.forward(input, legalMask);
+}
+
+// ========== 便捷函数 ==========
+
+static NeuralNetEvaluator *neuralNetInstance = nullptr;
+
+bool tryLoadNeuralNet(const std::string &weightPath)
+{
+    if (!neuralNetInstance)
+        neuralNetInstance = new NeuralNetEvaluator();
+
+    if (neuralNetInstance->loadModel(weightPath))
+    {
+        setEvaluator(neuralNetInstance);
+        std::cerr << "[AZ] Switched to NeuralNetEvaluator\n";
+        return true;
+    }
+    else
+    {
+        std::cerr << "[AZ] Failed to load neural net, using HeuristicEvaluator\n";
+        return false;
+    }
 }

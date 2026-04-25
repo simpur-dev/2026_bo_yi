@@ -23,3 +23,7 @@ std::array<float, AZ_ACTION_SIZE> getLegalMask(const Board &board);
 
 // 获取所有合法动作的索引列表
 std::vector<int> getLegalActions(const Board &board);
+
+// 验证 60 动作映射的正确性（双向一致性检查）
+// 返回 true 表示全部通过，false 表示有错误（会输出到 stderr）
+bool validateActionMapping();

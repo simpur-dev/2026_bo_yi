@@ -92,17 +92,87 @@ class DotsAndBoxesNet(nn.Module):
         return policy_logits, value
 
 
-def create_model(device="cpu"):
-    """创建并返回模型实例"""
-    model = DotsAndBoxesNet().to(device)
+class DotsAndBoxesMLP(nn.Module):
+    """
+    轻量 MLP 策略价值网络
+
+    优点:
+      - 结构简单，易于在 C++ 中手写前向传播
+      - 无 BatchNorm/Conv，推理速度快
+      - 适合作为初版验证网络
+
+    结构:
+      Flatten(7×11×11=847) -> FC(256) -> ReLU -> FC(128) -> ReLU
+      -> Policy Head: FC(60)
+      -> Value Head: FC(1) + Tanh
+    """
+
+    INPUT_SIZE = CHANNELS * BOARD_SIZE * BOARD_SIZE  # 847
+    HIDDEN1 = 256
+    HIDDEN2 = 128
+
+    def __init__(self, action_size=ACTION_SIZE):
+        super().__init__()
+
+        self.fc1 = nn.Linear(self.INPUT_SIZE, self.HIDDEN1)
+        self.fc2 = nn.Linear(self.HIDDEN1, self.HIDDEN2)
+        self.policy_head = nn.Linear(self.HIDDEN2, action_size)
+        self.value_head = nn.Linear(self.HIDDEN2, 1)
+
+    def forward(self, x):
+        """
+        Args:
+            x: (batch, 7, 11, 11) 棋盘特征张量
+
+        Returns:
+            policy_logits: (batch, 60) 策略 logits（未 softmax）
+            value: (batch, 1) 局面价值 [-1, 1]
+        """
+        x = x.view(x.size(0), -1)  # Flatten -> (batch, 847)
+        x = F.relu(self.fc1(x))    # -> (batch, 256)
+        x = F.relu(self.fc2(x))    # -> (batch, 128)
+
+        policy_logits = self.policy_head(x)   # -> (batch, 60)
+        value = torch.tanh(self.value_head(x)) # -> (batch, 1)
+
+        return policy_logits, value
+
+
+def create_model(arch="cnn", device="cpu"):
+    """
+    创建并返回模型实例
+
+    Args:
+        arch: "cnn" 使用 ResNet CNN, "mlp" 使用轻量 MLP
+        device: 目标设备
+    """
+    if arch == "mlp":
+        model = DotsAndBoxesMLP().to(device)
+    else:
+        model = DotsAndBoxesNet().to(device)
     return model
 
 
 if __name__ == "__main__":
-    # 测试网络
-    model = create_model()
+    import sys
+
+    arch = sys.argv[1] if len(sys.argv) > 1 else "cnn"
+    print(f"=== Architecture: {arch.upper()} ===")
+
+    model = create_model(arch=arch)
     dummy_input = torch.randn(1, CHANNELS, BOARD_SIZE, BOARD_SIZE)
     policy, value = model(dummy_input)
+
     print(f"Policy shape: {policy.shape}")   # (1, 60)
-    print(f"Value shape: {value.shape}")     # (1, 1)
-    print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"Value shape:  {value.shape}")    # (1, 1)
+    print(f"Total params: {sum(p.numel() for p in model.parameters()):,}")
+
+    # 列出所有参数名和形状
+    print("\nParameters:")
+    for name, param in model.named_parameters():
+        print(f"  {name:30s} {list(param.shape)}")
+
+    # MLP 权重总量（用于估算 C++ 推理内存需求）
+    if arch == "mlp":
+        total_bytes = sum(p.numel() * 4 for p in model.parameters())
+        print(f"\nWeight file size (float32): {total_bytes:,} bytes ({total_bytes / 1024:.1f} KB)")

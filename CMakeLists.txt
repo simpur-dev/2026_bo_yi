@@ -48,6 +48,8 @@ file(GLOB_RECURSE SOURCES
         src/AI/az/az_mcts.cpp
         src/AI/az/az_move.h
         src/AI/az/az_move.cpp
+        src/AI/az/az_neural_net.h
+        src/AI/az/az_neural_net.cpp
         src/element/Time.cpp
         src/element/Time.h
         src/CJSON/cJSON.c

@@ -5,37 +5,58 @@
 #include <vector>
 #include <array>
 
-// PUCT 蒙特卡洛树搜索
+// ========== PUCT 蒙特卡洛树搜索 ==========
+//
+// 一次迭代流程:
+//
+//   1. Selection
+//      从根节点出发，根据 PUCT 分数一路选择子节点，直到到达叶节点或终局节点
+//
+//   2. Evaluation
+//      到达叶节点后:
+//        - 游戏已结束 → 根据比分计算精确价值
+//        - 进入终局（只剩长链/环）→ 调用精确终局求解器
+//        - 其他情况 → 调用策略价值网络（或启发式评估器）
+//
+//   3. Expansion
+//      根据 policy 为所有合法动作创建子节点
+//      每个子节点执行该动作 → 自动吃 C 型格 → 确定下一个玩家
+//
+//   4. Backup
+//      把 value 沿路径回传，更新每个节点的 visits 和 valueSum
+//      回传时根据节点 player 是否与叶节点 player 相同决定加减号
+
 class AZMCTS
 {
   public:
-    // 对当前局面执行 PUCT 搜索，返回根节点
-    // board: 已吃完 C 型格的局面
-    // player: 当前玩家
-    // numSimulations: 模拟次数
-    // timeLimitMs: 时间上限（毫秒），0 表示不限时
+    // 执行 PUCT 搜索，返回根节点（调用方负责释放）
     AZNode *search(const Board &board, int player, int numSimulations, int timeLimitMs);
 
-    // 从搜索结果中选择最佳动作
-    // temperature: 0.0 贪心选最多访问次数, > 0 按访问次数的概率采样
+    // 选择最佳动作
+    // temperature = 0: 贪心选访问次数最多的
+    // temperature > 0: 按 visits^(1/T) 的概率采样（用于自对弈训练）
     int selectAction(const AZNode *root, float temperature = 0.0f) const;
 
-    // 获取根节点子节点的访问次数分布（用于训练数据）
+    // 获取访问次数分布 π（用于生成训练数据）
     std::array<float, AZ_ACTION_SIZE> getVisitDistribution(const AZNode *root) const;
 
+    // 收集搜索统计信息
+    AZSearchStats getSearchStats(const AZNode *root, int elapsedMs) const;
+
   private:
-    // 单次 PUCT 迭代：选择 -> 评估/扩展 -> 回传
+    // 单次 PUCT 迭代
     void simulate(AZNode *root);
 
-    // 扩展叶节点
+    // 扩展叶节点: 根据 policy 创建所有合法动作的子节点
     void expand(AZNode *node, const NetworkOutput &output);
 
-    // 回传价值
+    // 回传价值: 沿路径更新 visits 和 valueSum
     void backup(const std::vector<AZNode *> &path, float value, int leafPlayer);
 
-    // 判断局面是否为终局（只剩长链/环，无 Filter 可行边）
-    bool isEndgame(const Board &board, int player) const;
+    // 检查并标记终局节点（游戏结束 / 只剩长链环）
+    // 返回 true 表示该节点是终局，value 已写入 terminalValue
+    bool checkAndMarkTerminal(AZNode *node) const;
 
-    // 用精确终局求解器评估
+    // 用精确终局求解器评估（仅在终局时调用）
     float endgameEvaluate(const Board &board, int player) const;
 };

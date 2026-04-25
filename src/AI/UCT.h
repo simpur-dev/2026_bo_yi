@@ -26,6 +26,6 @@ void deleteUCTNode(Node *Root); //*用于释放空间
 void deleteUCTTree(Node &Root);
 void UCTMoveWithSacrifice(Board &CB, int Player, vector<LOC> &pace); //*包括UCT搜索前的预处理
 void latterSituationMove(Board &CB, int Player, vector<LOC> &pace); //*基于特殊结构体的决策，一般用于后期
-void gameTurnMove(Board &CB, int Player, int *status, vector<LOC> &pace); //*根据前后期自动移动
+void gameTurnMove(Board &CB, int Player, volatile int *status, vector<LOC> &pace); //*根据前后期自动移动
 
 #endif // DOTS_AND_BOXES_UCT_H

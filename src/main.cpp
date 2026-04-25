@@ -68,7 +68,7 @@ void handleBoard(int x, int y);
 bool contains(sf::RectangleShape &box, int x, int y);
 ////////AI移动///////////
 std::future<void> work;
-int status = 0;
+volatile int status = 0;
 void AIMove();
 int main()
 {
@@ -584,47 +584,49 @@ bool contains(sf::RectangleShape &box, int x, int y)
     return box.getLocalBounds().contains(x, y);
 }
 ////////AI下棋函数//////////
+// 异步 AI：用独立的 Board 副本在后台线程计算，完成后拷贝结果回主线程
+Board *shadowBoard = nullptr;       // 后台线程用的棋盘副本
+int shadowPlayer = 0;               // 后台线程用的玩家副本
+std::vector<LOC> shadowSteps;       // 后台线程输出的步骤
+
+void aiWorker()
+{
+    volatile int dummy = 0;
+    gameTurnMove(*shadowBoard, shadowPlayer, &dummy, shadowSteps);
+}
+
 void AIMove()
 {
-    if (!work.valid())
+    if (gameBoard->ifEnd())
     {
-        if (gameBoard->ifEnd())
-        {
-            game_begin = 0;
-            return;
-        }
-        if (nowPlayer == BLACK)
-        {
-            if (black_ai)
-            {
-                ai_steps.clear();
-                work = std::async(std::launch::async, gameTurnMove, std::ref(*gameBoard), std::ref(nowPlayer), &status,
-                                  std::ref(ai_steps));
-            }
-        }
-        else
-        {
-            if (white_ai)
-            {
-                ai_steps.clear();
-                work = std::async(std::launch::async, gameTurnMove, std::ref(*gameBoard), std::ref(nowPlayer), &status,
-                                  std::ref(ai_steps));
-            }
-        }
+        game_begin = 0;
+        return;
     }
-    if (work.valid() &&
-        work.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
+
+    // 阶段 1: 检查后台任务是否完成
+    if (work.valid())
     {
+        if (work.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+            return; // 仍在计算
+
         work.get();
-        status = 0;
-        if (ai_steps.empty())
+
+        // 将后台结果同步到主棋盘
+        if (shadowSteps.empty())
         {
-            // 游戏已结束，无步可走
-            status = 0;
             game_begin = 0;
+            delete shadowBoard;
+            shadowBoard = nullptr;
             return;
         }
-        if (nowPlayer == BLACK)
+
+        // 在主棋盘上重放后台线程的走步
+        for (auto &loc : shadowSteps)
+        {
+            gameBoard->move(shadowPlayer, loc);
+        }
+
+        if (shadowPlayer == BLACK)
         {
             black_time.stop();
             white_time.start();
@@ -634,13 +636,25 @@ void AIMove()
             white_time.stop();
             black_time.start();
         }
-        // cout << "size: " << ai_steps.size() << endl;
-        for (auto &i : ai_steps)
+        for (auto &i : shadowSteps)
         {
-            steps[++top] = {nowPlayer, i};
+            steps[++top] = {shadowPlayer, i};
         }
-        nowMove = ai_steps.back();
-        nowPlayer = -nowPlayer;
-        status = 0;
+        nowMove = shadowSteps.back();
+        nowPlayer = -shadowPlayer;
+
+        delete shadowBoard;
+        shadowBoard = nullptr;
+        return;
+    }
+
+    // 阶段 2: 启动新的后台任务
+    if ((nowPlayer == BLACK && black_ai) || (nowPlayer != BLACK && white_ai))
+    {
+        // 创建棋盘副本给后台线程，避免数据竞争
+        shadowBoard = new Board(*gameBoard);
+        shadowPlayer = nowPlayer;
+        shadowSteps.clear();
+        work = std::async(std::launch::async, aiWorker);
     }
 }

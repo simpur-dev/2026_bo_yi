@@ -360,7 +360,7 @@ void latterSituationMove(Board &CB, int Player, vector<LOC> &pace)
 }
 
 //游戏移动，会根据前中后期自动移动
-void gameTurnMove(Board &CB, int Player, int *status, vector<LOC> &pace)
+void gameTurnMove(Board &CB, int Player, volatile int *status, vector<LOC> &pace)
 {
     // This Function is using for the game's move turn.
 

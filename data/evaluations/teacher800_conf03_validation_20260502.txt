@@ -1,0 +1,78 @@
+AlphaZero Teacher800 Confidence-Filtered MLP Validation Diagnostic
+Date: 2026-05-02
+
+Goal:
+  Train an MLP candidate on newly generated higher-simulation heuristic teacher data and check whether more high-confidence samples improve validation generalization.
+
+Teacher data:
+  Directory: data/selfplay_teacher800
+  Games: 1000
+  Simulations per move: 800
+  Files: 20
+  Total samples: 34318
+
+Teacher data confidence statistics:
+  avg max(policy):    0.1563
+  median max(policy): 0.0663
+  p90 max(policy):    0.4588
+
+  max(policy) >= 0.2: 6362 samples (18.5384%)
+  max(policy) >= 0.3: 5170 samples (15.0650%)
+  max(policy) >= 0.4: 4070 samples (11.8597%)
+  max(policy) >= 0.5: 3001 samples (8.7447%)
+  max(policy) >= 0.6: 2248 samples (6.5505%)
+  max(policy) >= 0.7: 1664 samples (4.8488%)
+  max(policy) >= 0.8: 1210 samples (3.5258%)
+
+Training command:
+  python train/train.py --data_dir data/selfplay_teacher800 --arch mlp --epochs 120 --batch_size 256 --lr 0.001 --device cuda --model_dir data/models --run_name candidate_teacher800_conf03 --policy_temperature 0 --scheduler_step 1000 --eval_interval 10 --val_split 0.1 --split_seed 2026 --min_policy_confidence 0.3
+
+Dataset split after filtering:
+  Loaded samples: 5170
+  Filtered samples: 29148
+  Train samples: 4653
+  Val samples: 517
+
+Checkpoint metrics:
+  epoch | train_acc | val_acc | train_policy | val_policy | train_mae | val_mae | train_sign | val_sign
+     10 |    0.1307 |  0.1044 |       3.0159 |     3.2905 |    0.7654 |  0.8154 |     0.7002 |   0.6596
+     20 |    0.1979 |  0.1141 |       2.8501 |     3.2588 |    0.7142 |  0.7907 |     0.7473 |   0.6770
+     30 |    0.2530 |  0.1103 |       2.6138 |     3.4284 |    0.5631 |  0.7254 |     0.8169 |   0.6770
+     40 |    0.3121 |  0.1006 |       2.3790 |     3.4639 |    0.4075 |  0.6630 |     0.9153 |   0.7234
+     50 |    0.3763 |  0.0986 |       2.1545 |     3.5293 |    0.2629 |  0.6060 |     0.9613 |   0.7331
+     60 |    0.4260 |  0.1064 |       1.9699 |     3.5509 |    0.1842 |  0.5692 |     0.9813 |   0.7447
+     70 |    0.4971 |  0.0986 |       1.7553 |     3.5924 |    0.1670 |  0.5622 |     0.9809 |   0.7582
+     80 |    0.5657 |  0.1044 |       1.5697 |     3.6982 |    0.1158 |  0.5273 |     0.9901 |   0.7582
+     90 |    0.6205 |  0.0986 |       1.3695 |     4.0021 |    0.0986 |  0.5036 |     0.9880 |   0.7640
+    100 |    0.6892 |  0.1044 |       1.2047 |     3.9829 |    0.0761 |  0.5058 |     0.9938 |   0.7718
+    110 |    0.7612 |  0.1025 |       0.9602 |     4.2539 |    0.0654 |  0.5146 |     0.9944 |   0.7640
+    120 |    0.8081 |  0.1122 |       0.8399 |     4.5761 |    0.0555 |  0.5244 |     0.9948 |   0.7505
+
+Comparison:
+  Previous filtered MLP on 400-sim teacher data:
+    max(policy) >= 0.3 samples: 2240
+    Best ValPolicyAcc: 0.1295
+
+  Teacher800 filtered MLP:
+    max(policy) >= 0.3 samples: 5170
+    Best ValPolicyAcc: 0.1141 at epoch 20
+
+Key finding:
+  Teacher800 generated more high-confidence samples, but validation top-1 policy accuracy did not improve.
+  The model still overfits: TrainPolicyAcc reaches 0.8081 by epoch 120, while ValPolicyAcc stays around 0.10-0.11.
+  Best validation accuracy occurs very early, around epoch 20.
+
+Decision:
+  Do not export candidate_teacher800_conf03 for arena evaluation.
+  Do not promote any weights from this run.
+  Keep official data/models/weights.bin unchanged.
+
+Interpretation:
+  More 800-sim heuristic teacher data alone is not sufficient.
+  The bottleneck likely involves target formulation, data diversity, validation split methodology, or teacher policy noise/ambiguity rather than only high-confidence sample count.
+
+Recommended next steps:
+  1. Implement game-level train/validation split instead of random sample split, to measure generalization across games more reliably.
+  2. Add sample weighting by policy confidence/entropy instead of hard filtering.
+  3. Try training on combined old + teacher800 data only after adding weighting and better validation.
+  4. If evaluating a checkpoint anyway, use epoch 20 as the least-overfit diagnostic candidate, not the final model.

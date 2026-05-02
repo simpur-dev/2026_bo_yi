@@ -9,6 +9,7 @@ html/
 latex/
 __pycache__/
 data/selfplay/*.jsonl
+data/selfplay_teacher800/*.jsonl
 data/models/*.pt
 data/models/*.bin
 data/models/*_desc.txt

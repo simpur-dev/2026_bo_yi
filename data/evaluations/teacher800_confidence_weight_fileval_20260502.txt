@@ -1,0 +1,63 @@
+AlphaZero Teacher800 Confidence-Weighted MLP File-Level Validation Diagnostic
+Date: 2026-05-02
+
+Goal:
+  Test sample weighting by teacher policy confidence instead of hard filtering. All teacher800 samples are kept, but policy loss is weighted by max(policy). Validation metrics remain unweighted.
+
+Code changes:
+  train/train.py:
+    Added --policy_weight_mode with choices none, confidence, entropy.
+    confidence mode weights each policy loss sample by max(original_policy).
+    entropy mode weights each policy loss sample by 1 - normalized_entropy(original_policy).
+    Weights are computed before policy_temperature sharpening.
+
+Training command:
+  python train/train.py --data_dir data/selfplay_teacher800 --arch mlp --epochs 80 --batch_size 256 --lr 0.001 --device cuda --model_dir data/models --run_name candidate_teacher800_weight_conf_fileval --policy_temperature 1 --scheduler_step 1000 --eval_interval 10 --val_split 0.1 --split_seed 2026 --split_mode file --policy_weight_mode confidence
+
+Dataset split:
+  Total samples: 34318
+  Train files: 18
+  Val files: 2
+  Train samples: 30892
+  Val samples: 3426
+
+Checkpoint metrics:
+  epoch | train_acc | val_acc | train_policy | val_policy | train_mae | val_mae | train_sign | val_sign
+     10 |    0.0616 |  0.0511 |       3.6210 |     3.6418 |    0.8536 |  0.9449 |     0.6764 |   0.5832
+     20 |    0.0789 |  0.0566 |       3.5829 |     3.6481 |    0.5556 |  0.8830 |     0.8046 |   0.5954
+     30 |    0.0892 |  0.0636 |       3.5681 |     3.6668 |    0.4261 |  0.8909 |     0.8630 |   0.5791
+     40 |    0.0990 |  0.0680 |       3.5551 |     3.6803 |    0.3562 |  0.9228 |     0.8903 |   0.5473
+     50 |    0.1044 |  0.0584 |       3.5468 |     3.6913 |    0.3281 |  0.9220 |     0.8973 |   0.5487
+     60 |    0.1091 |  0.0578 |       3.5425 |     3.7070 |    0.3075 |  0.9281 |     0.9019 |   0.5496
+     70 |    0.1119 |  0.0543 |       3.5393 |     3.7127 |    0.2812 |  0.8975 |     0.9070 |   0.5598
+     80 |    0.1176 |  0.0584 |       3.5381 |     3.7296 |    0.2673 |  0.9123 |     0.9134 |   0.5540
+
+Comparison:
+  Teacher800 hard-filtered conf>=0.3, file-level validation:
+    Total samples after filtering: 5170
+    Best ValPolicyAcc: 0.1169 at epoch 60
+    Epoch 120 ValValueMAE: 0.8564
+
+  Teacher800 confidence-weighted, no hard filter, file-level validation:
+    Total samples: 34318
+    Best ValPolicyAcc: 0.0680 at epoch 40
+    Epoch 80 ValValueMAE: 0.9123
+
+Key findings:
+  Keeping all samples and weighting policy loss by max(policy) did not improve validation policy top-1.
+  Validation policy accuracy is only about 5-7%, much worse than hard filtering's about 11-12%.
+  Value generalization remains poor under file-level validation.
+
+Decision:
+  Do not export candidate_teacher800_weight_conf_fileval.
+  Do not run arena evaluation for this run.
+  Keep official data/models/weights.bin unchanged.
+
+Interpretation:
+  Simple confidence weighting is too weak: low-confidence/flat samples still dominate the dataset and do not provide useful top-1 policy supervision.
+  Hard filtering remains better for policy top-1, but hard filtering overfits due to small data size.
+
+Recommended next steps:
+  1. Try stronger weighting, such as confidence squared or entropy weighting, before abandoning weighting.
+  2. Consider combining hard filtering with weighting, e.g. min_policy_confidence=0.2 plus policy_weight_mode=confidence.
+  3. Investigate value target quality under file-level validation, since ValValueMAE remains very high.

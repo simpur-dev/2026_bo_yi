@@ -32,7 +32,7 @@ def named_model_path(model_dir, run_name, filename):
     return os.path.join(model_dir, filename)
 
 
-def masked_cross_entropy(policy_logits, target_policy, legal_mask):
+def masked_cross_entropy(policy_logits, target_policy, legal_mask, reduction="mean"):
     """
     计算带合法动作 mask 的交叉熵损失
 
@@ -45,6 +45,8 @@ def masked_cross_entropy(policy_logits, target_policy, legal_mask):
     masked_logits = policy_logits - (1 - legal_mask) * 1e9
     log_probs = F.log_softmax(masked_logits, dim=1)
     loss = -torch.sum(target_policy * log_probs, dim=1)
+    if reduction == "none":
+        return loss
     return loss.mean()
 
 
@@ -65,7 +67,24 @@ def sharpen_policy(target_policy, legal_mask, temperature):
     return torch.where(denom > 0.0, powered / denom.clamp_min(1e-12), fallback)
 
 
-def train_epoch(model, dataloader, optimizer, device, policy_temperature):
+def policy_sample_weights(target_policy, legal_mask, mode):
+    if mode == "none":
+        return None
+
+    probs = target_policy * legal_mask
+    denom = probs.sum(dim=1, keepdim=True).clamp_min(1e-12)
+    probs = probs / denom
+
+    if mode == "confidence":
+        return probs.max(dim=1).values.clamp_min(1e-6)
+
+    legal_count = legal_mask.sum(dim=1).clamp_min(2.0)
+    entropy = -torch.sum(torch.where(probs > 0.0, probs * torch.log(probs.clamp_min(1e-12)), torch.zeros_like(probs)), dim=1)
+    normalized_entropy = entropy / torch.log(legal_count)
+    return (1.0 - normalized_entropy).clamp_min(1e-6)
+
+
+def train_epoch(model, dataloader, optimizer, device, policy_temperature, policy_weight_mode):
     """训练一个 epoch"""
     model.train()
     total_loss = 0.0
@@ -78,6 +97,7 @@ def train_epoch(model, dataloader, optimizer, device, policy_temperature):
         legal_mask = legal_mask.to(device)
         target_policy = target_policy.to(device)
         target_value = target_value.to(device)
+        policy_weights = policy_sample_weights(target_policy, legal_mask, policy_weight_mode)
         target_policy = sharpen_policy(target_policy, legal_mask, policy_temperature)
 
         optimizer.zero_grad()
@@ -86,7 +106,11 @@ def train_epoch(model, dataloader, optimizer, device, policy_temperature):
         predicted_value = predicted_value.squeeze(-1)
 
         # 策略损失
-        policy_loss = masked_cross_entropy(policy_logits, target_policy, legal_mask)
+        per_sample_policy_loss = masked_cross_entropy(policy_logits, target_policy, legal_mask, reduction="none")
+        if policy_weights is None:
+            policy_loss = per_sample_policy_loss.mean()
+        else:
+            policy_loss = torch.sum(per_sample_policy_loss * policy_weights) / torch.sum(policy_weights).clamp_min(1e-8)
 
         # 价值损失
         value_loss = F.mse_loss(predicted_value, target_value)
@@ -185,6 +209,7 @@ def main():
     parser.add_argument("--split_seed", type=int, default=2026, help="训练/验证划分随机种子")
     parser.add_argument("--split_mode", type=str, default="sample", choices=["sample", "file"], help="验证集划分方式: sample 随机样本划分，file 按 JSONL 文件划分")
     parser.add_argument("--min_policy_confidence", type=float, default=0.0, help="只加载 max(policy) 大于等于该阈值的样本，0 表示不过滤")
+    parser.add_argument("--policy_weight_mode", type=str, default="none", choices=["none", "confidence", "entropy"], help="policy loss 样本权重: none 不加权, confidence 使用 max(policy), entropy 使用 1-normalized_entropy")
     args = parser.parse_args()
     run_name = safe_run_name(args.run_name)
 
@@ -199,6 +224,7 @@ def main():
     print(f"Validation split: {args.val_split}")
     print(f"Split mode: {args.split_mode}")
     print(f"Min policy confidence: {args.min_policy_confidence}")
+    print(f"Policy weight mode: {args.policy_weight_mode}")
 
     # 创建模型
     model = create_model(arch=args.arch, device=device)
@@ -233,7 +259,7 @@ def main():
     # 训练循环
     best_loss = float("inf")
     for epoch in range(1, args.epochs + 1):
-        avg_loss, avg_policy, avg_value = train_epoch(model, train_loader, optimizer, device, args.policy_temperature)
+        avg_loss, avg_policy, avg_value = train_epoch(model, train_loader, optimizer, device, args.policy_temperature, args.policy_weight_mode)
         scheduler.step()
 
         message = (f"Epoch {epoch:3d}/{args.epochs} | "

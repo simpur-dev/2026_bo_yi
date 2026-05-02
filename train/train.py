@@ -183,6 +183,7 @@ def main():
     parser.add_argument("--policy_temperature", type=float, default=1.0, help="训练目标 policy 温度，低于 1 会锐化分布，0 表示 one-hot")
     parser.add_argument("--val_split", type=float, default=0.0, help="验证集比例，0 表示不划分验证集")
     parser.add_argument("--split_seed", type=int, default=2026, help="训练/验证划分随机种子")
+    parser.add_argument("--split_mode", type=str, default="sample", choices=["sample", "file"], help="验证集划分方式: sample 随机样本划分，file 按 JSONL 文件划分")
     parser.add_argument("--min_policy_confidence", type=float, default=0.0, help="只加载 max(policy) 大于等于该阈值的样本，0 表示不过滤")
     args = parser.parse_args()
     run_name = safe_run_name(args.run_name)
@@ -196,6 +197,7 @@ def main():
     print(f"Run name: {run_name if run_name else '(official names)'}")
     print(f"Policy temperature: {args.policy_temperature}")
     print(f"Validation split: {args.val_split}")
+    print(f"Split mode: {args.split_mode}")
     print(f"Min policy confidence: {args.min_policy_confidence}")
 
     # 创建模型
@@ -218,6 +220,7 @@ def main():
         max_samples=args.max_samples,
         val_split=args.val_split,
         split_seed=args.split_seed,
+        split_mode=args.split_mode,
         min_policy_confidence=args.min_policy_confidence,
     )
     if train_loader is None:

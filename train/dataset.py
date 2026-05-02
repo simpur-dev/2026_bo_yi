@@ -13,6 +13,7 @@
 
 import json
 import os
+import random
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader, random_split
@@ -25,7 +26,7 @@ ACTION_SIZE = 60
 class DotsAndBoxesDataset(Dataset):
     """AlphaZero 训练数据集"""
 
-    def __init__(self, data_dir, file_pattern="*.jsonl", max_samples=0, min_policy_confidence=0.0):
+    def __init__(self, data_dir, file_pattern="*.jsonl", max_samples=0, min_policy_confidence=0.0, filenames=None):
         """
         Args:
             data_dir: 数据目录路径
@@ -34,6 +35,7 @@ class DotsAndBoxesDataset(Dataset):
         self.samples = []
         self.max_samples = max_samples
         self.min_policy_confidence = min_policy_confidence
+        self.filenames = filenames
         self._load_data(data_dir)
 
     def _load_data(self, data_dir):
@@ -43,7 +45,8 @@ class DotsAndBoxesDataset(Dataset):
             return
 
         filtered = 0
-        for filename in sorted(os.listdir(data_dir)):
+        filenames = self.filenames if self.filenames is not None else sorted(os.listdir(data_dir))
+        for filename in filenames:
             if filename.endswith(".jsonl"):
                 filepath = os.path.join(data_dir, filename)
                 with open(filepath, "r", encoding="utf-8") as f:
@@ -96,12 +99,40 @@ def create_dataloader(data_dir, batch_size=256, shuffle=True, num_workers=0, max
     return loader
 
 
-def create_dataloaders(data_dir, batch_size=256, shuffle=True, num_workers=0, max_samples=0, val_split=0.0, split_seed=2026, min_policy_confidence=0.0):
+def create_dataloaders(data_dir, batch_size=256, shuffle=True, num_workers=0, max_samples=0, val_split=0.0, split_seed=2026, min_policy_confidence=0.0, split_mode="sample"):
     dataset = DotsAndBoxesDataset(data_dir, max_samples=max_samples, min_policy_confidence=min_policy_confidence)
     if len(dataset) == 0:
         return None, None
     if val_split <= 0.0:
         return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers), None
+    if split_mode == "file":
+        filenames = sorted(filename for filename in os.listdir(data_dir) if filename.endswith(".jsonl"))
+        if len(filenames) < 2:
+            return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers), None
+        rng = random.Random(split_seed)
+        rng.shuffle(filenames)
+        val_file_count = int(len(filenames) * val_split)
+        val_file_count = max(1, min(val_file_count, len(filenames) - 1))
+        val_files = sorted(filenames[:val_file_count])
+        train_files = sorted(filenames[val_file_count:])
+        train_dataset = DotsAndBoxesDataset(
+            data_dir,
+            max_samples=max_samples,
+            min_policy_confidence=min_policy_confidence,
+            filenames=train_files,
+        )
+        val_dataset = DotsAndBoxesDataset(
+            data_dir,
+            min_policy_confidence=min_policy_confidence,
+            filenames=val_files,
+        )
+        if len(train_dataset) == 0 or len(val_dataset) == 0:
+            return None, None
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        print(f"Train files: {len(train_files)}  Val files: {len(val_files)}")
+        print(f"Train samples: {len(train_dataset)}  Val samples: {len(val_dataset)}")
+        return train_loader, val_loader
 
     val_size = int(len(dataset) * val_split)
     val_size = max(1, min(val_size, len(dataset) - 1))

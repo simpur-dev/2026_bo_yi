@@ -22,7 +22,7 @@ def export_onnx(model_path, output_path, arch="mlp"):
         dummy_input,
         output_path,
         export_params=True,
-        opset_version=13,
+        opset_version=18,
         do_constant_folding=True,
         input_names=["board"],
         output_names=["policy_logits", "value"],
@@ -39,7 +39,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True, help="PyTorch 模型路径")
     parser.add_argument("--output", type=str, default="../data/models/model.onnx", help="ONNX 输出路径")
-    parser.add_argument("--arch", type=str, default="mlp", choices=["cnn", "mlp"],
-                        help="网络架构: cnn 或 mlp")
+    parser.add_argument("--arch", type=str, default="mlp",
+                        choices=["mlp", "cnn", "resnet_s", "resnet_m", "resnet_l"],
+                        help="网络架构: mlp / resnet_s / resnet_m / resnet_l (cnn=resnet_s)")
     args = parser.parse_args()
     export_onnx(args.model_path, args.output, arch=args.arch)

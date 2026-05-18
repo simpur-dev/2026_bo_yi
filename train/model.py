@@ -5,18 +5,32 @@ Dots and Boxes AlphaZero 策略价值网络
 输出:
   policy: batch × 60 (每条边的推荐概率)
   value:  batch × 1  (局面价值 [-1, 1])
+
+架构:
+  mlp        - 轻量 MLP (257K params)，可 C++ 手写推理
+  resnet_s   - 4 blocks × 64 channels (~120K params)，快速调试
+  resnet_m   - 6 blocks × 128 channels (~550K params)，主力候选
+  resnet_l   - 10 blocks × 256 channels (~3.5M params)，长期强力模型
+  cnn        - resnet_s 的别名 (向下兼容)
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# ========== 网络参数 ==========
+# ========== 常量 ==========
 BOARD_SIZE = 11
 CHANNELS = 7
 ACTION_SIZE = 60
-NUM_RES_BLOCKS = 4
-NUM_FILTERS = 64
+
+# ========== ResNet 预设 ==========
+RESNET_PRESETS = {
+    "resnet_s": {"num_res_blocks": 4,  "num_filters": 64,  "value_hidden": 128},
+    "resnet_m": {"num_res_blocks": 6,  "num_filters": 128, "value_hidden": 256},
+    "resnet_l": {"num_res_blocks": 10, "num_filters": 256, "value_hidden": 256},
+}
+
+ALL_ARCHS = ["mlp", "cnn", "resnet_s", "resnet_m", "resnet_l"]
 
 
 class ResidualBlock(nn.Module):
@@ -39,11 +53,20 @@ class ResidualBlock(nn.Module):
 
 
 class DotsAndBoxesNet(nn.Module):
-    """AlphaZero 风格的策略价值双头网络"""
+    """
+    AlphaZero 风格 ResNet 策略价值双头网络
 
-    def __init__(self, in_channels=CHANNELS, num_filters=NUM_FILTERS,
-                 num_res_blocks=NUM_RES_BLOCKS, action_size=ACTION_SIZE):
+    支持通过 num_filters / num_res_blocks / value_hidden 参数化：
+      resnet_s:  4 blocks × 64 ch,  value_hidden=128
+      resnet_m:  6 blocks × 128 ch, value_hidden=256
+      resnet_l: 10 blocks × 256 ch, value_hidden=256
+    """
+
+    def __init__(self, in_channels=CHANNELS, num_filters=64,
+                 num_res_blocks=4, action_size=ACTION_SIZE,
+                 value_hidden=128, policy_channels=2):
         super().__init__()
+        self.board_size = BOARD_SIZE
 
         # 骨干网络: 初始卷积 + 残差块
         self.initial_conv = nn.Conv2d(in_channels, num_filters, 3, padding=1, bias=False)
@@ -54,15 +77,15 @@ class DotsAndBoxesNet(nn.Module):
         ])
 
         # 策略头
-        self.policy_conv = nn.Conv2d(num_filters, 2, 1, bias=False)
-        self.policy_bn = nn.BatchNorm2d(2)
-        self.policy_fc = nn.Linear(2 * BOARD_SIZE * BOARD_SIZE, action_size)
+        self.policy_conv = nn.Conv2d(num_filters, policy_channels, 1, bias=False)
+        self.policy_bn = nn.BatchNorm2d(policy_channels)
+        self.policy_fc = nn.Linear(policy_channels * BOARD_SIZE * BOARD_SIZE, action_size)
 
         # 价值头
         self.value_conv = nn.Conv2d(num_filters, 1, 1, bias=False)
         self.value_bn = nn.BatchNorm2d(1)
-        self.value_fc1 = nn.Linear(BOARD_SIZE * BOARD_SIZE, 128)
-        self.value_fc2 = nn.Linear(128, 1)
+        self.value_fc1 = nn.Linear(BOARD_SIZE * BOARD_SIZE, value_hidden)
+        self.value_fc2 = nn.Linear(value_hidden, 1)
 
     def forward(self, x):
         """
@@ -143,20 +166,40 @@ def create_model(arch="cnn", device="cpu"):
     创建并返回模型实例
 
     Args:
-        arch: "cnn" 使用 ResNet CNN, "mlp" 使用轻量 MLP
+        arch: 架构名称
+            "mlp"      - 轻量 MLP
+            "cnn"      - ResNet small (向下兼容别名)
+            "resnet_s" - 4 blocks × 64 channels
+            "resnet_m" - 6 blocks × 128 channels
+            "resnet_l" - 10 blocks × 256 channels
         device: 目标设备
     """
     if arch == "mlp":
         model = DotsAndBoxesMLP().to(device)
+    elif arch in RESNET_PRESETS:
+        preset = RESNET_PRESETS[arch]
+        model = DotsAndBoxesNet(
+            num_filters=preset["num_filters"],
+            num_res_blocks=preset["num_res_blocks"],
+            value_hidden=preset["value_hidden"],
+        ).to(device)
+    elif arch == "cnn":
+        # 向下兼容: cnn = resnet_s
+        preset = RESNET_PRESETS["resnet_s"]
+        model = DotsAndBoxesNet(
+            num_filters=preset["num_filters"],
+            num_res_blocks=preset["num_res_blocks"],
+            value_hidden=preset["value_hidden"],
+        ).to(device)
     else:
-        model = DotsAndBoxesNet().to(device)
+        raise ValueError(f"Unknown arch: {arch}. Choose from: {ALL_ARCHS}")
     return model
 
 
 if __name__ == "__main__":
     import sys
 
-    arch = sys.argv[1] if len(sys.argv) > 1 else "cnn"
+    arch = sys.argv[1] if len(sys.argv) > 1 else "resnet_s"
     print(f"=== Architecture: {arch.upper()} ===")
 
     model = create_model(arch=arch)
@@ -171,6 +214,13 @@ if __name__ == "__main__":
     print("\nParameters:")
     for name, param in model.named_parameters():
         print(f"  {name:30s} {list(param.shape)}")
+
+    # 列出所有架构的参数量
+    print("\n=== All architectures ===")
+    for a in ALL_ARCHS:
+        m = create_model(arch=a)
+        n = sum(p.numel() for p in m.parameters())
+        print(f"  {a:12s} {n:>10,} params")
 
     # MLP 权重总量（用于估算 C++ 推理内存需求）
     if arch == "mlp":

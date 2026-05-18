@@ -1,14 +1,20 @@
 """
 训练数据集
 
-数据格式（JSONL，每行一条样本）:
+Schema v1 (原始):
 {
-    "board": [7 × 11 × 11 的一维浮点数组],
+    "board": [7×11×11 一维浮点数组],
     "player": 1 或 -1,
     "legal_mask": [60 维 0/1 数组],
     "policy": [60 维概率分布],
     "value": 浮点数 [-1, 1]
 }
+
+Schema v2 (扩展, 向下兼容):
+  新增 game_id, move_index, decision_index, value_margin,
+  black_score_final, white_score_final, winner, phase,
+  teacher, simulations, temperature,
+  root_policy_entropy, root_policy_confidence
 """
 
 import json
@@ -17,6 +23,7 @@ import random
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader, random_split
+from augmentation import augment_sample, NUM_TRANSFORMS
 
 BOARD_SIZE = 11
 CHANNELS = 7
@@ -26,16 +33,29 @@ ACTION_SIZE = 60
 class DotsAndBoxesDataset(Dataset):
     """AlphaZero 训练数据集"""
 
-    def __init__(self, data_dir, file_pattern="*.jsonl", max_samples=0, min_policy_confidence=0.0, filenames=None):
+    def __init__(self, data_dir, file_pattern="*.jsonl", max_samples=0, min_policy_confidence=0.0, filenames=None, augment=False, value_mode="margin", q_weight=0.25):
         """
         Args:
             data_dir: 数据目录路径
             file_pattern: 文件匹配模式
+            max_samples: 最多加载多少条样本，0 表示全部
+            min_policy_confidence: 最低 policy 置信度过滤
+            filenames: 指定加载的文件名列表
+            augment: 是否启用 D4 对称增强 (8 倍)
+            value_mode: 价值目标模式
+                "margin"  - 使用 value_margin (默认)
+                "wdl"     - 使用 value (+1/-1/0)
+                "q"       - 使用 root_q (MCTS Q值)
+                "q+z"     - 混合: q_weight*Q + (1-q_weight)*z
+            q_weight: Q 值权重 (value_mode="q+z" 时使用)
         """
         self.samples = []
         self.max_samples = max_samples
         self.min_policy_confidence = min_policy_confidence
         self.filenames = filenames
+        self.augment = augment
+        self.value_mode = value_mode
+        self.q_weight = q_weight
         self._load_data(data_dir)
 
     def _load_data(self, data_dir):
@@ -79,8 +99,24 @@ class DotsAndBoxesDataset(Dataset):
         # 策略目标: 60（已经是概率分布）
         policy = np.array(sample["policy"], dtype=np.float32)
 
-        # 价值目标: 标量
-        value = np.float32(sample["value"])
+        # 价值目标: 根据 value_mode 选择
+        if self.value_mode == "q" and "root_q" in sample:
+            value = np.float32(sample["root_q"])
+        elif self.value_mode == "q+z" and "root_q" in sample:
+            q = sample["root_q"]
+            z = sample["value"]
+            value = np.float32(self.q_weight * q + (1 - self.q_weight) * z)
+        elif self.value_mode == "wdl":
+            value = np.float32(sample["value"])
+        elif self.value_mode == "margin" and "value_margin" in sample:
+            value = np.float32(sample["value_margin"])
+        else:
+            value = np.float32(sample["value"])
+
+        # D4 对称增强: 随机选择一种变换
+        if self.augment:
+            t = np.random.randint(0, NUM_TRANSFORMS)
+            board, legal_mask, policy = augment_sample(board, legal_mask, policy, t)
 
         return (
             torch.from_numpy(board),
@@ -90,17 +126,17 @@ class DotsAndBoxesDataset(Dataset):
         )
 
 
-def create_dataloader(data_dir, batch_size=256, shuffle=True, num_workers=0, max_samples=0, min_policy_confidence=0.0):
+def create_dataloader(data_dir, batch_size=256, shuffle=True, num_workers=0, max_samples=0, min_policy_confidence=0.0, augment=False, value_mode="margin", q_weight=0.25):
     """创建 DataLoader"""
-    dataset = DotsAndBoxesDataset(data_dir, max_samples=max_samples, min_policy_confidence=min_policy_confidence)
+    dataset = DotsAndBoxesDataset(data_dir, max_samples=max_samples, min_policy_confidence=min_policy_confidence, augment=augment, value_mode=value_mode, q_weight=q_weight)
     if len(dataset) == 0:
         return None
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
     return loader
 
 
-def create_dataloaders(data_dir, batch_size=256, shuffle=True, num_workers=0, max_samples=0, val_split=0.0, split_seed=2026, min_policy_confidence=0.0, split_mode="sample"):
-    dataset = DotsAndBoxesDataset(data_dir, max_samples=max_samples, min_policy_confidence=min_policy_confidence)
+def create_dataloaders(data_dir, batch_size=256, shuffle=True, num_workers=0, max_samples=0, val_split=0.0, split_seed=2026, min_policy_confidence=0.0, split_mode="sample", augment=False, value_mode="margin", q_weight=0.25):
+    dataset = DotsAndBoxesDataset(data_dir, max_samples=max_samples, min_policy_confidence=min_policy_confidence, augment=augment, value_mode=value_mode, q_weight=q_weight)
     if len(dataset) == 0:
         return None, None
     if val_split <= 0.0:
@@ -120,11 +156,17 @@ def create_dataloaders(data_dir, batch_size=256, shuffle=True, num_workers=0, ma
             max_samples=max_samples,
             min_policy_confidence=min_policy_confidence,
             filenames=train_files,
+            augment=augment,
+            value_mode=value_mode,
+            q_weight=q_weight,
         )
         val_dataset = DotsAndBoxesDataset(
             data_dir,
             min_policy_confidence=min_policy_confidence,
             filenames=val_files,
+            augment=False,  # 验证集不增强
+            value_mode=value_mode,
+            q_weight=q_weight,
         )
         if len(train_dataset) == 0 or len(val_dataset) == 0:
             return None, None

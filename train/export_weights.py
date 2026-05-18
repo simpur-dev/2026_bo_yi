@@ -66,8 +66,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True, help="PyTorch 模型路径")
     parser.add_argument("--output", type=str, default="../data/models/candidate_weights.bin", help="二进制权重输出路径")
-    parser.add_argument("--arch", type=str, default="mlp", choices=["cnn", "mlp"],
-                        help="网络架构: cnn 或 mlp（必须与训练时一致）")
+    parser.add_argument("--arch", type=str, default="mlp",
+                        choices=["mlp", "cnn", "resnet_s", "resnet_m", "resnet_l"],
+                        help="网络架构 (必须与训练时一致)")
     parser.add_argument("--promote", action="store_true", help="允许导出覆盖正式 weights.bin")
     args = parser.parse_args()
 

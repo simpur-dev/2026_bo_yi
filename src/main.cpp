@@ -86,8 +86,8 @@ int main()
         config >> BlackName >> WhiteName;
         config.close();
     }
-    // 尝试加载神经网络权重（加载失败则使用启发式评估器）
-    tryLoadNeuralNet("data/models/weights.bin");
+    // 尝试加载 AI 模型（优先 ONNX CNN，失败则回退启发式）
+    tryLoadModel("data/models/backward_model.onnx");
 
     initSidebar();
     while (mainWindow.isOpen())

@@ -1,4 +1,5 @@
 #include "az_evaluator.h"
+#include "az_onnx_evaluator.h"
 #include "az_action.h"
 #include "az_encoder.h"
 #include "../define.h"
@@ -167,5 +168,26 @@ bool tryLoadNeuralNet(const std::string &weightPath)
     {
         std::cerr << "[AZ] Failed to load neural net, using HeuristicEvaluator\n";
         return false;
+    }
+}
+
+// 自动检测模型文件类型并加载
+bool tryLoadModel(const std::string &modelPath)
+{
+    // 检测文件扩展名
+    std::string ext;
+    auto dotPos = modelPath.rfind('.');
+    if (dotPos != std::string::npos)
+        ext = modelPath.substr(dotPos);
+
+    if (ext == ".onnx")
+    {
+        // 使用 ONNX Runtime 加载 CNN 模型
+        return tryLoadOnnxModel(modelPath);
+    }
+    else
+    {
+        // 默认按 MLP 二进制权重加载
+        return tryLoadNeuralNet(modelPath);
     }
 }

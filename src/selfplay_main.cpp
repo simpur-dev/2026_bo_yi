@@ -37,13 +37,13 @@ int main(int argc, char *argv[])
               << "  Simulations: " << numSims << "\n"
               << "  Output:      " << outputDir << "\n";
 
-    // 尝试加载神经网络权重
+    // 尝试加载模型 (自动检测 .onnx CNN 或 .bin MLP)
     if (!weightPath.empty())
     {
-        if (tryLoadNeuralNet(weightPath))
-            std::cerr << "  Evaluator:   NeuralNet (" << weightPath << ")\n";
+        if (tryLoadModel(weightPath))
+            std::cerr << "  Evaluator:   Model (" << weightPath << ")\n";
         else
-            std::cerr << "  Evaluator:   Heuristic (weight load failed)\n";
+            std::cerr << "  Evaluator:   Heuristic (model load failed)\n";
     }
     else
     {
@@ -53,6 +53,12 @@ int main(int argc, char *argv[])
     std::cerr << "\n";
 
     SelfPlayEngine engine;
+
+    // 设置 teacher 标识（schema v2）
+    std::string teacher = weightPath.empty() ? "heuristic" : "neuralnet";
+    teacher += "_" + std::to_string(numSims);
+    engine.setTeacher(teacher);
+
     engine.run(numGames, numSims, outputDir);
 
     return 0;

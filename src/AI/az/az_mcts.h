@@ -30,6 +30,10 @@ class AZMCTS
 {
   public:
     // 执行 PUCT 搜索，返回根节点（调用方负责释放）
+    // 使用 MCTSConfig 控制搜索行为（噪声、时间限制等）
+    AZNode *search(const Board &board, int player, const MCTSConfig &config);
+
+    // 兼容旧接口（默认 evaluation 模式，无噪声）
     AZNode *search(const Board &board, int player, int numSimulations, int timeLimitMs);
 
     // 选择最佳动作
@@ -44,6 +48,8 @@ class AZMCTS
     AZSearchStats getSearchStats(const AZNode *root, int elapsedMs) const;
 
   private:
+    MCTSConfig config_; // 当前搜索配置
+
     // 单次 PUCT 迭代
     void simulate(AZNode *root);
 

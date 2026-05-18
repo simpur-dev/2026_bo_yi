@@ -5,7 +5,10 @@
 #include <string>
 
 // 策略价值评估器接口
-// 初期使用启发式实现；后续替换为神经网络推理
+// 支持三种实现：
+//   1. HeuristicEvaluator - 手工规则
+//   2. NeuralNetEvaluator - MLP 手写推理 (weights.bin)
+//   3. ONNXEvaluator      - CNN/MLP ONNX 推理 (model.onnx) [需 USE_ONNX]
 class AZEvaluator
 {
   public:
@@ -40,5 +43,11 @@ class NeuralNetEvaluator : public AZEvaluator
 AZEvaluator &getEvaluator();
 void setEvaluator(AZEvaluator *evaluator);
 
-// 便捷函数：尝试加载神经网络，如加载失败则使用启发式评估器
+// 便捷函数：尝试加载 MLP 神经网络，如加载失败则使用启发式评估器
 bool tryLoadNeuralNet(const std::string &weightPath);
+
+// 便捷函数：自动检测文件类型 (.onnx / .bin) 并加载对应评估器
+// .onnx -> ONNXEvaluator (需编译时启用 USE_ONNX)
+// .bin  -> NeuralNetEvaluator (MLP)
+// 其他  -> 尝试作为 MLP 加载
+bool tryLoadModel(const std::string &modelPath);

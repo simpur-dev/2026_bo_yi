@@ -16,14 +16,14 @@ static std::mt19937 azRng(std::random_device{}());
 
 // 添加 Dirichlet 噪声到根节点的先验概率（增加探索多样性）
 // 混合后: P' = (1 - frac) × P + frac × noise
-static void addDirichletNoise(AZNode *root)
+static void addDirichletNoise(AZNode *root, float alpha, float frac)
 {
     if (root->children.empty())
         return;
 
     int n = static_cast<int>(root->children.size());
     std::vector<float> noise(n);
-    std::gamma_distribution<float> gamma(AZ_DIRICHLET_ALPHA, 1.0f);
+    std::gamma_distribution<float> gamma(alpha, 1.0f);
 
     float sum = 0.0f;
     for (int i = 0; i < n; i++)
@@ -40,15 +40,17 @@ static void addDirichletNoise(AZNode *root)
     for (int i = 0; i < n; i++)
     {
         root->children[i]->prior =
-            (1.0f - AZ_DIRICHLET_FRAC) * root->children[i]->prior +
-            AZ_DIRICHLET_FRAC * noise[i];
+            (1.0f - frac) * root->children[i]->prior +
+            frac * noise[i];
     }
 }
 
 // ========== AZMCTS::search ==========
 
-AZNode *AZMCTS::search(const Board &board, int player, int numSimulations, int timeLimitMs)
+AZNode *AZMCTS::search(const Board &board, int player, const MCTSConfig &config)
 {
+    config_ = config;
+
     AZNode *root = new AZNode(board, player, -1, 0.0f);
 
     // 检查根节点是否已是终局
@@ -59,26 +61,31 @@ AZNode *AZMCTS::search(const Board &board, int player, int numSimulations, int t
     NetworkOutput rootOutput = getEvaluator().evaluate(board, player);
     expand(root, rootOutput);
 
-    // 对根节点添加 Dirichlet 噪声
-    addDirichletNoise(root);
+    // 仅在自对弈模式下添加 Dirichlet 噪声
+    if (config_.addRootNoise)
+        addDirichletNoise(root, config_.dirichletAlpha, config_.dirichletFrac);
 
     // 搜索主循环
     auto startTime = std::chrono::steady_clock::now();
     constexpr int TIME_CHECK_INTERVAL = 64; // 每 64 次迭代检查一次时间
 
     int sim = 0;
-    for (; sim < numSimulations; sim++)
+    for (; sim < config_.simulations; sim++)
     {
         // 定期检查时间限制（减少 chrono 调用开销）
-        if (timeLimitMs > 0 && (sim & (TIME_CHECK_INTERVAL - 1)) == 0 && sim > 0)
+        if (config_.timeLimitMs > 0 && (sim & (TIME_CHECK_INTERVAL - 1)) == 0 && sim > 0)
         {
             auto now = std::chrono::steady_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
-            if (elapsed >= timeLimitMs)
+            if (elapsed >= config_.timeLimitMs)
                 break;
         }
 
         simulate(root);
+
+        // 终局传播导致根节点已精确求解 → 立即退出，不浪费剩余模拟
+        if (root->terminal)
+            break;
     }
 
     // 输出搜索统计
@@ -88,6 +95,12 @@ AZNode *AZMCTS::search(const Board &board, int player, int numSimulations, int t
     std::cerr << stats.toString() << "\n";
 
     return root;
+}
+
+// 兼容旧接口：默认 evaluation 模式（无噪声）
+AZNode *AZMCTS::search(const Board &board, int player, int numSimulations, int timeLimitMs)
+{
+    return search(board, player, MCTSConfig::evaluation(numSimulations, timeLimitMs));
 }
 
 // ========== AZMCTS::simulate ==========
@@ -131,24 +144,105 @@ void AZMCTS::simulate(AZNode *root)
         // 正常局面：调用评估器获取 policy + value，然后扩展
         NetworkOutput output = getEvaluator().evaluate(node->board, node->player);
         expand(node, output);
-        value = output.value;
+
+        // 若扩展后节点因终局传播变为终局，使用精确值替代 NN 估值
+        if (node->terminal)
+            value = node->terminalValue;
+        else
+            value = output.value;
     }
 
     // ---- 4. Backup ----
     // 将 value（从叶节点 player 视角）沿路径回传
     backup(path, value, node->player);
+
+    // ---- 5. 终局传播 (向上级联) ----
+    // expand 可能使叶节点变为终局; 检查路径上的祖先是否也因此可精确求解
+    if (node->terminal && path.size() >= 2)
+    {
+        // 从叶节点的父节点开始向上检查
+        for (int i = static_cast<int>(path.size()) - 2; i >= 0; i--)
+        {
+            AZNode *parent = path[i];
+            if (parent->terminal)
+                continue; // 已经是终局了
+            if (!parent->expanded || parent->children.empty())
+                break;
+
+            // 检查 parent 的所有子节点是否均为终局
+            bool allTerminal = true;
+            for (auto *ch : parent->children)
+            {
+                if (!ch->terminal)
+                {
+                    allTerminal = false;
+                    break;
+                }
+            }
+            if (!allTerminal)
+                break;
+
+            // 所有子节点均为终局 → parent 精确求解
+            float bestValue = -2.0f;
+            for (auto *ch : parent->children)
+            {
+                float v;
+                if (ch->player == parent->player)
+                    v = ch->terminalValue;
+                else
+                    v = -ch->terminalValue;
+                if (v > bestValue)
+                    bestValue = v;
+            }
+            parent->terminal = true;
+            parent->terminalValue = bestValue;
+        }
+    }
+}
+
+// ========== 过滤动作辅助 ==========
+//
+// 使用 assess.cpp 的 getFilterMoves 获取安全边（不产生死链）
+// 减少搜索分支因子，避免探索明显坏招
+
+static std::vector<int> getFilteredActions(const Board &board)
+{
+    Board boardCopy = board;
+    BoxBoard bb(boardCopy);
+    LOC moves[60];
+    int n = bb.getFilterMoves(moves);
+
+    std::vector<int> actions;
+    actions.reserve(n);
+    for (int i = 0; i < n; i++)
+    {
+        int a = locToAction(moves[i]);
+        if (a >= 0)
+            actions.push_back(a);
+    }
+    return actions;
 }
 
 // ========== AZMCTS::expand ==========
+//
+// 三大优化:
+//   1. 过滤动作剪枝: 只扩展安全边 (不产生死链), 减小分支因子
+//   2. 子节点即时终局检测: 创建后立即检查是否终局, 避免浪费 sim
+//   3. 终局传播: 若全部子节点均为终局, 父节点也精确求解
+//      (形成级联，将大量终局子树不经神经网络直接求解)
 
 void AZMCTS::expand(AZNode *node, const NetworkOutput &output)
 {
     if (node->expanded || node->terminal)
         return;
 
-    auto legalActions = getLegalActions(node->board);
+    // 优化 1: 使用过滤动作 (安全边)，减少分支因子
+    // 先尝试过滤招法, 若没有安全边则回退到全部合法招法
+    auto filteredActions = getFilteredActions(node->board);
+    auto allActions = getLegalActions(node->board);
+    auto &expandActions = filteredActions.empty() ? allActions : filteredActions;
 
-    if (legalActions.empty())
+    if (allActions.empty())
     {
         // 无合法动作 → 游戏结束，标记为终局
         node->expanded = true;
@@ -165,26 +259,25 @@ void AZMCTS::expand(AZNode *node, const NetworkOutput &output)
 
     // 合法动作的 policy 归一化
     float policySum = 0.0f;
-    for (int a : legalActions)
+    for (int a : expandActions)
         policySum += output.policy[a];
 
-    // 为每个合法动作创建子节点
-    node->children.reserve(legalActions.size());
+    // 为每个动作创建子节点
+    node->children.reserve(expandActions.size());
+    int terminalChildCount = 0;
 
-    for (int a : legalActions)
+    for (int a : expandActions)
     {
-        // 先验概率：归一化后的 policy；如果全为 0 则均匀分布
+        // 先验概率：归一化后的 policy
         float prior = (policySum > 1e-8f)
                           ? output.policy[a] / policySum
-                          : 1.0f / static_cast<float>(legalActions.size());
+                          : 1.0f / static_cast<float>(expandActions.size());
 
         // 执行动作
         Board childBoard = node->board;
         int earned = childBoard.move(node->player, actionToLoc(a));
 
-        // 确定下一个玩家:
-        //   吃到格子 → 当前玩家继续，并贪心吃完所有 C 型格
-        //   没吃到   → 切换到对手，对手先吃完 C 型格
+        // 确定下一个玩家 + 吃 C 型格
         int nextPlayer;
         if (earned > 0)
         {
@@ -198,10 +291,37 @@ void AZMCTS::expand(AZNode *node, const NetworkOutput &output)
         }
 
         AZNode *child = new AZNode(childBoard, nextPlayer, a, prior);
+
+        // 优化 2: 子节点即时终局检测
+        // 创建后立即检查是否是终局节点, 避免浪费后续模拟
+        if (checkAndMarkTerminal(child))
+            terminalChildCount++;
+
         node->children.push_back(child);
     }
 
     node->expanded = true;
+
+    // 优化 3: 终局传播
+    // 若全部子节点都是终局, 则父节点的价值精确已知:
+    // 当前玩家可以选择最优子节点 → value = max(子节点 value from 父视角)
+    if (terminalChildCount == static_cast<int>(node->children.size()))
+    {
+        float bestValue = -2.0f;
+        for (auto *child : node->children)
+        {
+            // 将子节点的 terminalValue 转换到父节点视角
+            float v;
+            if (child->player == node->player)
+                v = child->terminalValue;     // 同视角
+            else
+                v = -child->terminalValue;    // 对手视角, 取反
+            if (v > bestValue)
+                bestValue = v;
+        }
+        node->terminal = true;
+        node->terminalValue = bestValue;
+    }
 }
 
 // ========== AZMCTS::backup ==========

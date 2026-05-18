@@ -1,13 +1,22 @@
-#include "AI/az/az_move.h"
+#include "AI/az/az_mcts.h"
+#include "AI/az/az_node.h"
+#include "AI/az/az_action.h"
+#include "AI/az/az_types.h"
 #include "AI/az/az_evaluator.h"
+#include "AI/az/az_onnx_evaluator.h"
+#include "AI/assess.h"
 #include "AI/board.h"
 #include "AI/define.h"
 #include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <iomanip>
 #include <streambuf>
 #include <vector>
+
+// 前向声明终局求解器（定义在 UCT.cpp 中）
+void latterSituationMove(Board &CB, int Player, std::vector<LOC> &pace);
 
 struct PlayerConfig
 {
@@ -29,6 +38,8 @@ struct MatchStats
     int bAsWhiteWins = 0;
     int blackScoreSum = 0;
     int whiteScoreSum = 0;
+    int simulations = 800;
+    int tempMoves = 4;
 };
 
 class NullBuffer : public std::streambuf
@@ -42,6 +53,29 @@ std::unique_ptr<AZEvaluator> createEvaluator(const std::string &spec)
     if (spec == "heuristic" || spec == "HEURISTIC")
         return std::make_unique<HeuristicEvaluator>();
 
+    // 检测文件扩展名
+    std::string ext;
+    auto dotPos = spec.rfind('.');
+    if (dotPos != std::string::npos)
+        ext = spec.substr(dotPos);
+
+#ifdef USE_ONNX
+    if (ext == ".onnx")
+    {
+        auto evaluator = std::make_unique<ONNXEvaluator>();
+        if (!evaluator->loadModel(spec))
+            return nullptr;
+        return evaluator;
+    }
+#else
+    if (ext == ".onnx")
+    {
+        std::cerr << "[Error] ONNX model specified but USE_ONNX not enabled at compile time\n";
+        return nullptr;
+    }
+#endif
+
+    // 默认: MLP 二进制权重
     auto evaluator = std::make_unique<NeuralNetEvaluator>();
     if (!evaluator->loadModel(spec))
         return nullptr;
@@ -52,33 +86,190 @@ int playOneGame(AZEvaluator &blackEvaluator,
                 AZEvaluator &whiteEvaluator,
                 int &blackScore,
                 int &whiteScore,
+                int simulations,
+                int tempMoves,
                 bool verbose)
 {
     Board board;
     int player = BLACK;
-    int guard = 0;
+    int moveCount = 0;
     NullBuffer nullBuffer;
 
-    while (!board.ifEnd() && guard < 200)
+    while (!board.ifEnd() && moveCount < 500)
     {
-        std::vector<LOC> pace;
+        // 1. 吃掉所有 C 型格
+        std::vector<LOC> forcedPace;
+        board.eatAllCTypeBoxes(player, forcedPace);
+        moveCount += static_cast<int>(forcedPace.size());
+
+        if (board.ifEnd())
+            break;
+
+        // 2. 检查终局（只剩长链/环）→ 精确求解
+        {
+            Board test = board;
+            test.eatAllCTypeBoxes(player);
+            if (test.getFilterMoveNum() == 0)
+            {
+                std::streambuf *oldBuf = nullptr;
+                if (!verbose)
+                    oldBuf = std::cerr.rdbuf(&nullBuffer);
+                std::vector<LOC> pace;
+                latterSituationMove(board, player, pace);
+                if (!verbose && oldBuf)
+                    std::cerr.rdbuf(oldBuf);
+                moveCount += static_cast<int>(pace.size());
+                player = -player;
+                continue;
+            }
+        }
+
+        // 3. 死链/死环预处理
+        {
+            BoxBoard dead(board);
+            bool deadChain = dead.getDeadChainExist();
+            bool deadCircle = dead.getDeadCircleExist();
+
+            if (deadCircle || deadChain)
+            {
+                int sacrificeBoxNum = deadCircle ? 4 : 2;
+                BoxBoard sim(board);
+                sim.eatAllCTypeBoxes(player);
+                LOC boxNum = sim.getEarlyRationalBoxNum();
+
+                if (boxNum.first - boxNum.second <= sacrificeBoxNum)
+                {
+                    // 全吃更优
+                    std::vector<LOC> eatPace;
+                    board.eatAllCTypeBoxes(player, eatPace);
+                    moveCount += static_cast<int>(eatPace.size());
+                    // 不换手，继续检查
+                }
+                else
+                {
+                    // 牺牲更优：执行 Double-Cross
+                    if (sacrificeBoxNum == 2)
+                    {
+                        for (;;)
+                        {
+                            Board testBoard = board;
+                            testBoard.eatCBox(player);
+                            BoxBoard deadTest(testBoard);
+                            if (deadTest.getDeadChainExist())
+                            {
+                                LOC t = board.eatCBox(player);
+                                if (t.first >= 0)
+                                    moveCount++;
+                            }
+                            else
+                                break;
+                        }
+                    }
+                    else
+                    {
+                        for (;;)
+                        {
+                            Board testBoard = board;
+                            testBoard.eatCBox(player);
+                            BoxBoard deadTest(testBoard);
+                            if (deadTest.getDeadCircleExist())
+                            {
+                                LOC t = board.eatCBox(player);
+                                if (t.first >= 0)
+                                    moveCount++;
+                            }
+                            else
+                                break;
+                        }
+                    }
+                    LOC dcMove = board.getDoubleCrossLoc(player);
+                    board.move(player, dcMove);
+                    std::vector<LOC> tempPace;
+                    for (;;)
+                    {
+                        if (!board.getCTypeBoxLimit(player, tempPace))
+                            break;
+                    }
+                    moveCount += 1 + static_cast<int>(tempPace.size());
+                    player = -player;
+                    continue;
+                }
+            }
+        }
+
+        // 4. 再次检查终局（死链处理后可能进入终局）
+        if (board.ifEnd())
+            break;
+        {
+            Board test2 = board;
+            test2.eatAllCTypeBoxes(player);
+            if (test2.getFilterMoveNum() == 0)
+            {
+                std::streambuf *oldBuf = nullptr;
+                if (!verbose)
+                    oldBuf = std::cerr.rdbuf(&nullBuffer);
+                std::vector<LOC> pace;
+                latterSituationMove(board, player, pace);
+                if (!verbose && oldBuf)
+                    std::cerr.rdbuf(oldBuf);
+                moveCount += static_cast<int>(pace.size());
+                player = -player;
+                continue;
+            }
+        }
+
+        // 5. 设置评估器
         if (player == BLACK)
             setEvaluator(&blackEvaluator);
         else
             setEvaluator(&whiteEvaluator);
 
-        std::streambuf *oldBuffer = nullptr;
-        if (!verbose)
-            oldBuffer = std::cerr.rdbuf(&nullBuffer);
-        AlphaZeroMove(board, player, pace);
-        if (!verbose)
-            std::cerr.rdbuf(oldBuffer);
+        // 6. MCTS 搜索
+        MCTSConfig config = MCTSConfig::evaluation(simulations, 0);
+        // 前几步加入轻微噪声以增加多样性
+        if (tempMoves > 0 && moveCount < tempMoves)
+        {
+            config.addRootNoise = true;
+            config.dirichletAlpha = 0.3f;
+            config.dirichletFrac = 0.15f;
+        }
 
-        if (pace.empty() && !board.ifEnd())
-            break;
+        AZMCTS mcts;
+        std::streambuf *oldBuf = nullptr;
+        if (!verbose)
+            oldBuf = std::cerr.rdbuf(&nullBuffer);
+        AZNode *root = mcts.search(board, player, config);
+        if (!verbose && oldBuf)
+            std::cerr.rdbuf(oldBuf);
 
-        player = -player;
-        guard++;
+        // 选择动作：前几步温度采样，之后贪心
+        float temp = (tempMoves > 0 && moveCount < tempMoves) ? 0.5f : 0.0f;
+        int action = mcts.selectAction(root, temp);
+
+        deleteAZTree(root);
+        delete root;
+
+        if (action < 0)
+        {
+            player = -player;
+            continue;
+        }
+
+        // 7. 执行动作
+        LOC loc = actionToLoc(action);
+        int earned = board.move(player, loc);
+        moveCount++;
+
+        if (verbose)
+            std::cerr << "[Move] #" << moveCount
+                      << " player=" << (player == BLACK ? "B" : "W")
+                      << " action=" << action
+                      << " earned=" << earned << "\n";
+
+        // 8. 玩家切换：吃到格子则继续，否则换手
+        if (earned == 0)
+            player = -player;
+        // else: 同一玩家继续（回到循环顶部吃 C 型格）
     }
 
     blackScore = board.blackBox;
@@ -97,7 +288,8 @@ void runGame(MatchStats &stats,
     int whiteScore = 0;
     AZEvaluator &blackEvaluator = aIsBlack ? *a.evaluator : *b.evaluator;
     AZEvaluator &whiteEvaluator = aIsBlack ? *b.evaluator : *a.evaluator;
-    int winner = playOneGame(blackEvaluator, whiteEvaluator, blackScore, whiteScore, verbose);
+    int winner = playOneGame(blackEvaluator, whiteEvaluator, blackScore, whiteScore,
+                              stats.simulations, stats.tempMoves, verbose);
 
     stats.games++;
     stats.blackScoreSum += blackScore;
@@ -140,7 +332,9 @@ void runGame(MatchStats &stats,
 void printSummary(const MatchStats &stats)
 {
     std::cout << "\n=== Evaluation Summary ===\n";
-    std::cout << "Games: " << stats.games << "\n";
+    std::cout << "Games: " << stats.games
+              << "  Sims: " << stats.simulations
+              << "  TempMoves: " << stats.tempMoves << "\n";
     std::cout << "BLACK wins: " << stats.blackWins
               << "  WHITE wins: " << stats.whiteWins
               << "  Unfinished: " << stats.unfinished << "\n";
@@ -152,6 +346,8 @@ void printSummary(const MatchStats &stats)
     std::cout << "B as WHITE wins: " << stats.bAsWhiteWins << "\n";
     if (stats.games > 0)
     {
+        double aWinRate = 100.0 * stats.aWins / stats.games;
+        std::cout << "A winrate: " << std::fixed << std::setprecision(1) << aWinRate << "%\n";
         std::cout << "Avg score BLACK: " << static_cast<double>(stats.blackScoreSum) / stats.games << "\n";
         std::cout << "Avg score WHITE: " << static_cast<double>(stats.whiteScoreSum) / stats.games << "\n";
     }
@@ -161,14 +357,32 @@ int main(int argc, char *argv[])
 {
     if (argc < 4)
     {
-        std::cerr << "Usage: evaluate_ai <games_per_side> <modelA|heuristic> <modelB|heuristic> [--verbose]\n";
+        std::cerr << "Usage: evaluate_ai <games_per_side> <modelA|heuristic> <modelB|heuristic> [options]\n";
+        std::cerr << "Options:\n";
+        std::cerr << "  --sims N       MCTS simulations per move (default: 800)\n";
+        std::cerr << "  --temp N       Temperature moves for diversity (default: 4, 0=deterministic)\n";
+        std::cerr << "  --verbose      Print detailed move info\n";
         return 1;
     }
 
     int gamesPerSide = std::atoi(argv[1]);
     if (gamesPerSide <= 0)
         gamesPerSide = 10;
-    bool verbose = (argc > 4 && std::string(argv[4]) == "--verbose");
+
+    // 解析可选参数
+    int simulations = 800;
+    int tempMoves = 4;
+    bool verbose = false;
+    for (int i = 4; i < argc; i++)
+    {
+        std::string arg = argv[i];
+        if (arg == "--sims" && i + 1 < argc)
+            simulations = std::atoi(argv[++i]);
+        else if (arg == "--temp" && i + 1 < argc)
+            tempMoves = std::atoi(argv[++i]);
+        else if (arg == "--verbose")
+            verbose = true;
+    }
 
     PlayerConfig a;
     PlayerConfig b;
@@ -185,10 +399,14 @@ int main(int argc, char *argv[])
 
     std::cout << "=== Dots & Boxes AI Evaluation ===\n";
     std::cout << "Games per side: " << gamesPerSide << "\n";
+    std::cout << "Simulations: " << simulations << "\n";
+    std::cout << "Temp moves: " << tempMoves << "\n";
     std::cout << "A: " << a.name << "\n";
     std::cout << "B: " << b.name << "\n";
 
     MatchStats stats;
+    stats.simulations = simulations;
+    stats.tempMoves = tempMoves;
     int gameIndex = 1;
     for (int i = 0; i < gamesPerSide; i++)
         runGame(stats, a, b, true, gameIndex++, verbose);

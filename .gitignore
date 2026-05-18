@@ -1,6 +1,7 @@
 *.exe
 .idea/
 build/
+build_onnx/
 cmake-build-*/
 .cache/
 chess*.txt
@@ -8,8 +9,23 @@ Doxyfile
 html/
 latex/
 __pycache__/
+
+# 第三方构建产物
+3rdparty/SFML_build/
+3rdparty/SFML_src/
+3rdparty/onnxruntime/
+
+# 训练数据（太大不入库）
 data/selfplay/*.jsonl
 data/selfplay_teacher800/*.jsonl
+data/backward_run1/iter_*/*.jsonl
+data/backward_run1/combined*/*.jsonl
+
+# 模型权重（大文件）
 data/models/*.pt
 data/models/*.bin
 data/models/*_desc.txt
+data/models/*.onnx.data
+
+# Arena 日志
+data/arena_*.log

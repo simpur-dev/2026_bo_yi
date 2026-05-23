@@ -102,6 +102,14 @@ def policy_sample_weights(target_policy, legal_mask, mode):
     return (1.0 - normalized_entropy).clamp_min(1e-6)
 
 
+def unpack_batch(batch):
+    if len(batch) == 5:
+        board, legal_mask, target_policy, target_value, sample_weight = batch
+        return board, legal_mask, target_policy, target_value, sample_weight
+    board, legal_mask, target_policy, target_value = batch
+    return board, legal_mask, target_policy, target_value, None
+
+
 # ========== KL 散度 ==========
 
 def compute_kl_divergence(model, dataloader, device, old_policy_logits_list):
@@ -121,9 +129,10 @@ def compute_kl_divergence(model, dataloader, device, old_policy_logits_list):
     num_samples = 0
 
     with torch.no_grad():
-        for batch_idx, (board, legal_mask, _, _) in enumerate(dataloader):
+        for batch_idx, batch in enumerate(dataloader):
             if batch_idx >= len(old_policy_logits_list):
                 break
+            board, legal_mask, _, _, _ = unpack_batch(batch)
             board = board.to(device)
             legal_mask = legal_mask.to(device)
             old_logits = old_policy_logits_list[batch_idx].to(device)
@@ -151,9 +160,10 @@ def snapshot_policy_logits(model, dataloader, device, max_batches=20):
     model.eval()
     logits_list = []
     with torch.no_grad():
-        for batch_idx, (board, _, _, _) in enumerate(dataloader):
+        for batch_idx, batch in enumerate(dataloader):
             if batch_idx >= max_batches:
                 break
+            board, _, _, _, _ = unpack_batch(batch)
             board = board.to(device)
             policy_logits, _ = model(board)
             logits_list.append(policy_logits.cpu())
@@ -170,12 +180,17 @@ def train_epoch(model, dataloader, optimizer, device, policy_temperature, policy
     total_value_loss = 0.0
     num_batches = 0
 
-    for board, legal_mask, target_policy, target_value in dataloader:
+    for batch in dataloader:
+        board, legal_mask, target_policy, target_value, sample_weight = unpack_batch(batch)
         board = board.to(device)
         legal_mask = legal_mask.to(device)
         target_policy = target_policy.to(device)
         target_value = target_value.to(device)
+        if sample_weight is not None:
+            sample_weight = sample_weight.to(device)
         policy_weights = policy_sample_weights(target_policy, legal_mask, policy_weight_mode)
+        if sample_weight is not None:
+            policy_weights = sample_weight if policy_weights is None else policy_weights * sample_weight
         target_policy = sharpen_policy(target_policy, legal_mask, policy_temperature)
 
         optimizer.zero_grad()
@@ -191,7 +206,11 @@ def train_epoch(model, dataloader, optimizer, device, policy_temperature, policy
             policy_loss = torch.sum(per_sample_policy_loss * policy_weights) / torch.sum(policy_weights).clamp_min(1e-8)
 
         # 价值损失
-        value_loss = F.mse_loss(predicted_value, target_value)
+        per_sample_value_loss = F.mse_loss(predicted_value, target_value, reduction="none")
+        if sample_weight is None:
+            value_loss = per_sample_value_loss.mean()
+        else:
+            value_loss = torch.sum(per_sample_value_loss * sample_weight) / torch.sum(sample_weight).clamp_min(1e-8)
 
         # 总损失
         loss = policy_loss + value_loss
@@ -231,7 +250,8 @@ def evaluate(model, dataloader, device, policy_temperature):
     num_batches = 0
 
     with torch.no_grad():
-        for board, legal_mask, target_policy, target_value in dataloader:
+        for batch in dataloader:
+            board, legal_mask, target_policy, target_value, _ = unpack_batch(batch)
             board = board.to(device)
             legal_mask = legal_mask.to(device)
             target_policy = target_policy.to(device)
@@ -364,16 +384,28 @@ def main():
     parser.add_argument("--split_mode", type=str, default="file",
                         choices=["sample", "file"],
                         help="验证集划分方式")
+    parser.add_argument("--val_file_strategy", type=str, default="recent",
+                        choices=["recent", "random"],
+                        help="file split 下 val 集选择策略。recent (默认)=最近文件，"
+                             "保证 val 与 deploy 同分布; random=旧的随机抽样，仅诊断用。")
     parser.add_argument("--min_policy_confidence", type=float, default=0.0,
                         help="只加载 max(policy) >= 该阈值的样本")
     parser.add_argument("--policy_weight_mode", type=str, default="none",
                         choices=["none", "confidence", "entropy"],
                         help="policy loss 样本权重")
+    parser.add_argument("--sample_weight_mode", type=str, default="none",
+                        choices=["none", "player", "winner", "player_winner"],
+                        help="按样本元数据平衡 policy/value loss")
+    parser.add_argument("--sample_weight_clip", type=float, default=5.0,
+                        help="样本平衡权重上限，0 表示不裁剪")
+    parser.add_argument("--player_channel_mode", type=str, default="original",
+                        choices=["original", "zero", "random_flip"],
+                        help="训练时处理当前玩家绝对黑白通道的方式")
     parser.add_argument("--augment", action="store_true",
                         help="启用 D4 对称增强 (8 倍)")
     parser.add_argument("--value_mode", type=str, default="margin",
-                        choices=["margin", "wdl", "q", "q+z"],
-                        help="价值目标: margin/wdl/q/q+z (反向训练用 q 或 q+z)")
+                        choices=["margin", "wdl", "q", "q+z", "q+margin"],
+                        help="价值目标: margin/wdl/q/q+z/q+margin")
     parser.add_argument("--q_weight", type=float, default=0.25,
                         help="Q 值权重 (value_mode=q+z 时: q_weight*Q + (1-q_weight)*z)")
     parser.add_argument("--seed", type=int, default=42,
@@ -406,6 +438,8 @@ def main():
     print(f"  Val split:      {args.val_split} ({args.split_mode})")
     print(f"  Policy temp:    {args.policy_temperature}")
     print(f"  Weight mode:    {args.policy_weight_mode}")
+    print(f"  Sample weights: {args.sample_weight_mode} (clip={args.sample_weight_clip})")
+    print(f"  Player channel: {args.player_channel_mode}")
     print(f"  Grad clip:      {args.grad_clip}")
     print(f"  Seed:           {args.seed}")
     print("=" * 60)
@@ -452,6 +486,10 @@ def main():
         augment=args.augment,
         value_mode=args.value_mode,
         q_weight=args.q_weight,
+        sample_weight_mode=args.sample_weight_mode,
+        sample_weight_clip=args.sample_weight_clip,
+        player_channel_mode=args.player_channel_mode,
+        val_file_strategy=args.val_file_strategy,
     )
     if train_loader is None:
         print("No training data found. Please generate data first.")
@@ -540,15 +578,21 @@ def main():
 
         print(msg)
 
-        # 保存最佳模型 (基于 val_loss, 回退到 train_loss)
-        current_metric = record.get("val_loss", avg_loss)
-        if current_metric < best_val_metric:
+        # 保存最佳模型: 度量一致性原则
+        #   - 旧行为按 val_loss = val_policy_loss + val_value_loss 选；但 value_loss
+        #     不直接决定 arena 实力，且当训练用 sample_weight 时 train/val loss 不同
+        #     形式，导致选择目标与下游任务脱钩。
+        #   - 新行为按 val_policy_loss 最小选 best_model：policy 决定动作分布，与
+        #     arena 评估严格对齐；无验证集时回退 train_loss。
+        should_consider_best = (val_loader is None) or ("val_policy_loss" in record)
+        current_metric = record["val_policy_loss"] if "val_policy_loss" in record else avg_loss
+        if should_consider_best and current_metric < best_val_metric:
             best_val_metric = current_metric
             save_path = named_model_path(args.model_dir, run_name, "best_model.pt")
             torch.save(model.state_dict(), save_path)
 
         # 定期 checkpoint
-        if epoch % args.eval_interval == 0:
+        if args.eval_interval > 0 and epoch % args.eval_interval == 0:
             ckpt_path = named_model_path(args.model_dir, run_name, f"checkpoint_epoch_{epoch}.pt")
             save_checkpoint(ckpt_path, model, optimizer, scheduler, epoch, args, metrics_history, best_val_metric)
 

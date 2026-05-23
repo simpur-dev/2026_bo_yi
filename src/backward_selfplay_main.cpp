@@ -49,7 +49,10 @@ int main(int argc, char *argv[])
         if (tryLoadModel(modelPath))
             std::cerr << "  Evaluator:   Model (" << modelPath << ")\n";
         else
-            std::cerr << "  Evaluator:   Heuristic (model load failed)\n";
+        {
+            std::cerr << "  Evaluator:   Model load failed: " << modelPath << "\n";
+            return 2;
+        }
     }
     else
     {

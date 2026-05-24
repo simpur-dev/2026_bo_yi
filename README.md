@@ -1,13 +1,15 @@
-# Heap Overflow DotsAndBoxes
+# Dots and Boxes — Hybrid Expert + AlphaZero
 
-> 一个基于 **UCT（Upper Confidence Bounds Applied to Trees）蒙特卡洛树搜索** 的点格棋（Dots and Boxes）AI 对弈程序，使用 C++17 和 SFML 图形库构建。
+> **世界最强点格棋 AI 项目**。采用 **Hybrid Expert + AlphaZero** 架构：精确组合博弈论规则处理可证明部分，神经网络 + MCTS 处理开局/中盘/未定结构。基于 BoxesZero (Entropy 2025) 论文的反向训练方法，结合自主扩展的 1-chain/2-chain 终局定理。
 
 ## 目录
 
 - [项目简介](#项目简介)
+- [当前状态](#当前状态)
 - [项目结构](#项目结构)
 - [环境要求](#环境要求)
 - [编译与运行](#编译与运行)
+- [训练流程](#训练流程)
 - [游戏操作说明](#游戏操作说明)
 - [棋盘数据结构](#棋盘数据结构)
 - [AI 算法详解](#ai-算法详解)
@@ -20,40 +22,72 @@
 点格棋（Dots and Boxes）是一个经典的两人回合制策略游戏：在 6×6 的点阵上，双方轮流连接相邻两点画一条边，当某条边使一个 1×1 格子的四条边全部被画出时，该格子归属当前玩家，并获得一次额外行动。所有 25 个格子被占满后，占格多的一方获胜。
 
 本项目实现了：
-- 基于 SFML 的图形化棋盘界面（1500×1000 窗口）
+- 基于 SFML 的图形化棋盘界面
 - 人 vs 人、人 vs AI、AI vs AI 三种对局模式
-- 基于 **UCT 蒙特卡洛树搜索 + 链式结构分析 + 理性状态博弈论终局求解** 的强力 AI
-- 棋局回放（Undo / Redo）与棋谱导出（JSON 格式）功能
-- 计时器功能，分别统计双方用时
+- **Hybrid Expert + AlphaZero** 架构 AI
+- **ONNX Runtime** 神经网络推理
+- **反向训练 (Backward Training)** 自动化流水线
+- Arena 评估工具 + 单元测试
+
+## 当前状态
+
+| 指标 | 值 |
+|---|---|
+| 最强模型 | iter18 (ResNet-S, 330K) → iter22 ResNet-M (1.83M) 实验中 |
+| vs heuristic | 72% 胜率 (ResNet-S 天花板) |
+| 白方 (后手) | 100% vs iter18 基线 |
+| 训练数据 | 41K 样本, 21 轮反向训练迭代 |
+| 架构版本 | Hybrid Expert v1 + 1-chain/2-chain 终局扩展 |
 
 ---
 
 ## 项目结构
 
 ```
-dots_and_boxes/
-├── CMakeLists.txt              # CMake 构建脚本
-├── README.md                   # 本文档
+├── CMakeLists.txt              # CMake 构建脚本 (ONNX/非ONNX双模式)
+├── README.md
+├── .gitignore
+├── 进度.md                     # 详细开发进度
 ├── 3rdparty/                   # 第三方库
-│   ├── SFML/                   #   SFML 2.5 图形库（头文件、库、DLL）
-│   └── nowide/                 #   Boost.Nowide（UTF-8 支持）
+│   ├── SFML_new/               #   SFML 2.6.2 (GCC 15.2 编译)
+│   └── onnxruntime/            #   ONNX Runtime C++ SDK
 ├── res/                        # 资源文件
-│   └── LXGWWenKai-Bold.ttf    #   霞鹜文楷粗体字体
-├── src/                        # 源代码
-│   ├── main.cpp                #   程序入口、SFML 窗口主循环、UI 逻辑
-│   ├── AI/                     #   AI 核心算法
-│   │   ├── define.h            #     全局常量、枚举、类型定义
-│   │   ├── board.h / board.cpp #     棋盘类：落子、悔棋、自由度、C型格等基础操作
-│   │   ├── Node.h / Node.cpp   #     UCT 搜索树节点类
-│   │   ├── UCT.h / UCT.cpp     #     UCT 搜索主流程、前中后期决策调度
-│   │   └── assess.h / assess.cpp #   高级局面评估：链/环识别、理性状态计算、等价裁边
+├── src/                        # C++ 源代码
+│   ├── main.cpp                #   GUI 主循环 (SFML)
+│   ├── evaluate_ai_main.cpp    #   Arena 评估工具
+│   ├── selfplay_main.cpp       #   前向自对弈 CLI
+│   ├── backward_selfplay_main.cpp # 反向自对弈 CLI
+│   ├── AI/                     #   AI 核心
+│   │   ├── define.h            #     全局常量/枚举/类型
+│   │   ├── board.h/cpp         #     棋盘类
+│   │   ├── Node.h/cpp          #     UCT 搜索树节点 (旧)
+│   │   ├── UCT.h/cpp           #     UCT 搜索 + 终局求解器
+│   │   ├── assess.h/cpp        #     链/环分析 + 理性状态计算
+│   │   └── az/                 #     AlphaZero 模块
+│   │       ├── az_types.h      #       MCTSConfig, SelfPlaySample
+│   │       ├── az_action.h/cpp #       动作编解码
+│   │       ├── az_encoder.h/cpp#       棋盘特征编码 (7×11×11)
+│   │       ├── az_node.h/cpp   #       MCTS 节点
+│   │       ├── az_mcts.h/cpp   #       PUCT 搜索 + Filter pruning
+│   │       ├── az_move.h/cpp   #       AlphaZeroMove (GUI入口)
+│   │       ├── az_selfplay.h/cpp#      自对弈引擎 (forward/backward)
+│   │       ├── az_evaluator.h/cpp#     评估器接口 (Heuristic/MLP/ONNX)
+│   │       ├── az_onnx_evaluator.h/cpp# ONNX Runtime 推理
+│   │       └── az_expert.h/cpp #       **统一专家层** (Hybrid Expert核心)
 │   ├── element/                #   辅助组件
-│   │   └── Time.h / Time.cpp   #     计时器
-│   └── CJSON/                  #   棋谱记录
-│       ├── cJSON.h / cJSON.c   #     cJSON 库
-│       └── datarecorder.h / datarecorder.cpp # 棋谱 JSON 生成
-└── test/                       # 测试代码
-    └── xieyi.cpp               #   协议测试
+│   └── CJSON/                  #   棋谱 JSON 导出
+├── train/                      # Python 训练管线
+│   ├── model.py                #   策略价值网络 (ResNet-S/M/L, MLP)
+│   ├── train.py                #   Trainer v2 (AdamW, KL监控, JSON报告)
+│   ├── dataset.py              #   JSONL 数据集 + D4 增强
+│   ├── augmentation.py         #   D4 对称群 (8种变换)
+│   ├── backward_training.py    #   反向训练编排脚本
+│   ├── export_onnx.py          #   PyTorch → ONNX 导出
+│   └── test_onnx_consistency.py#   ONNX 一致性验证
+├── test/                       # C++ 单元测试
+│   └── az_tests.cpp            #   27 个 AlphaZero 模块测试
+└── scripts/                    # 辅助脚本
+    └── setup_onnxruntime.py    #   ONNX Runtime SDK 下载
 ```
 
 ---
@@ -175,6 +209,46 @@ cd build
 
 ---
 
+## 训练流程
+
+### 反向训练 (Backward Training)
+
+基于 BoxesZero 论文 (Entropy 2025, 中国计算机博弈大赛冠军)：
+
+```bash
+cd train
+# 阶段 1: Value Network Reinforcement (从终局向开局推进)
+python backward_training.py --arch resnet_s --simulations 800 --start_st 50 --beta 5
+
+# 阶段 2: Policy Network Reinforcement (全程 MCTS)
+python backward_training.py --arch resnet_s --simulations 800 --max_iterations 3
+
+# 使用更大模型
+python backward_training.py --arch resnet_m --simulations 1600 --max_iterations 1
+```
+
+### Arena 评估
+
+```bash
+# 模型 vs 启发式 100 局基准测试
+./build_onnx/evaluate_ai.exe 50 data/models/backward_model.onnx heuristic --sims 800 --temp 4
+
+# 候选模型 vs 当前模型
+./build_onnx/evaluate_ai.exe 50 candidate.onnx current.onnx --sims 800 --temp 4
+```
+
+### 自对弈数据生成
+
+```bash
+# 前向自对弈
+./build_onnx/selfplay.exe 100 800 data/selfplay_output data/models/backward_model.onnx
+
+# 反向自对弈 (从第50步开始MCTS)
+./build_onnx/backward_selfplay.exe 50 800 50 data/backward_output data/models/backward_model.onnx
+```
+
+---
+
 ## 游戏操作说明
 
 程序窗口分为左右两部分：
@@ -261,218 +335,142 @@ bool isEmpty = (map[i][j] == BOX);  // BOX == EMPTY == 0
 
 ## AI 算法详解
 
-AI 的总体决策框架分为 **前中期（UCT 搜索）** 和 **后期（链式结构博弈论求解）** 两个阶段，入口函数为 `gameTurnMove()`。
+AI 采用 **Hybrid Expert + AlphaZero** 架构，核心思想：精确组合博弈论规则处理可证明部分，神经网络 + MCTS 专注处理开局/中盘/未定结构。
 
-### 1. 阶段划分
+### 架构总览
 
 ```
 gameTurnMove()
- ├── 判断是否进入后期：吃掉所有 C型格 后，是否还存在 Filter 可行边
- ├── 前中期 → UCTMoveWithSacrifice()  ── 预处理 + UCT 搜索
- └── 后期   → latterSituationMove()   ── 纯链式结构博弈论决策
+ ├── az_expert::applyPreSearch()  ── 确定性专家规则
+ │    ├── eatAllCTypeBoxes()      ── C 型格强制吃
+ │    ├── isEndgameAfterForcedCaptures() ── 终局检测
+ │    └── Dead Chain/Circle       ── Double-Cross 决策
+ └── AZMCTS::search()             ── PUCT 搜索 + NN 评估
+      ├── getFilteredActions()    ── 安全边过滤
+      ├── ONNXEvaluator::evaluate() ── ResNet 推理
+      └── expand()                ── 子节点 + az_expert::normalizeToSearch()
 ```
 
-**前中期判定条件**：模拟吃掉所有 C型格（自由度为 1 的格子）后，检查是否还存在"过滤可行边"（Filter Move，即不会产生新的死链的安全着法）。若存在，则仍在前中期；否则进入后期。
+### 1. 统一专家层 (`az_expert`)
 
-### 2. UCT 蒙特卡洛树搜索（前中期核心）
+**所有入口点共用同一套确定性规则**，确保训练/部署完全一致：
 
-UCT（Upper Confidence Bounds Applied to Trees）是 MCTS 的一种变体，核心流程：
+| API | 语义 | 入口 |
+|---|---|---|
+| `applyPreSearch()` | 单次专家处理 | GUI `AlphaZeroMove` |
+| `normalizeToSearch()` | 循环执行直到需要 NN+MCTS | selfplay, evaluate_ai, MCTS expand |
 
-#### 2.1 搜索流程 `UCTProcess()`
+处理的专家规则（按执行顺序）：
+1. **C 型格强制吃**：自由度=1 的格子立即捕获
+2. **终局检测**：吃尽 C 型格后若无安全边 → 进入终局求解器
+3. **死链/死环 Double-Cross**：计算"全吃 vs 牺牲"的理性状态收益对比
 
-```
-每次迭代：
-  1. 选择（Selection）
-     └─ 从根节点出发，每层用 UCB 公式选择最优子节点，直至：
-        (a) 遇到未完全扩展的节点 → 进入扩展
-        (b) 遇到游戏结束的叶节点 → 直接回传胜负
+### 2. PUCT 搜索 (`az_mcts`)
 
-  2. 扩展（Expansion）
-     └─ 创建一个新的子节点，对应一个尚未尝试的着法
-
-  3. 模拟（Simulation）
-     └─ 对新节点执行一次蒙特卡洛模拟（FilterMC），随机下完整盘并返回胜负结果
-
-  4. 反向传播（Backpropagation）
-     └─ 将模拟结果沿路径向上更新每个节点的平均收益 AvgValue
-```
-
-#### 2.2 UCB 公式
-
-节点选择采用 UCB1 公式平衡 **利用（exploitation）** 与 **探索（exploration）**：
+采用 AlphaZero 标准 PUCT 公式：
 
 ```
-UCB(i) = AvgValue(i) + sqrt( 2 × ln(Total) / Times(i) )
+PUCT(s,a) = Q(s,a) + c_puct × P(s,a) × √N(s) / (1 + N(s,a))
 ```
 
-- `AvgValue(i)`：子节点 i 的平均收益（对父节点而言）
-- `Total`：总迭代次数
-- `Times(i)`：子节点 i 被访问的次数
-- 探索常数 C = 1（定义在 `define.h`）
+**领域优化**：
+- **Filter Pruning**：只扩展安全边（不产生死链），减小分支因子 ~6×
+- **Instant Terminal Detection**：扩展子节点时立即标记终局
+- **Terminal Propagation Cascade**：全部子节点终局时父节点级联标记
 
-**平均收益更新**：父节点收益 = `1 - Σ(子节点收益 × 子节点访问占比)`，体现零和博弈的对抗性。
+### 3. 神经网络评估 (`model.py`)
 
-#### 2.3 蒙特卡洛模拟 `getFilterMCWinner()`
+输入 7×11×11 棋盘特征张量，输出 policy (60 维) + value (标量)。
 
-模拟阶段并非完全随机，而是采用 **过滤随机策略**：
+| 架构 | 参数量 | 状态 |
+|---|---|---|
+| resnet_s | 330K | 已确认天花板 (72% vs heuristic) |
+| **resnet_m** | **1.83M** | 🔬 实验中 |
+| resnet_l | 11.9M | 待数据扩充后启用 |
 
-1. 每步先贪心吃掉所有 C型格（自由度为 1 的必得格子）
-2. 当自由边数量 < 30 时，仅在 **Filter Move**（不会产生死链的安全着法）中随机选择
-3. 当自由边数量 ≥ 30 时，在所有自由边中随机选择（早期过滤代价过高）
-4. 模拟直到进入后期，然后用博弈论终局求解器判定胜负
+### 4. 链式结构分析 (`assess`)
 
-#### 2.4 关键参数
+| 类型 | 定义 | 牺牲代价 |
+|---|---|---|
+| **长链** LongChain | ≥3 格链 | 2 格 |
+| **短链** ShortChain | 1-2 格链 (BoxesZero 扩展) | 1-2 格 |
+| **环** Circle | ≥4 格环 | 4 格 |
+| **预备环** PreCircle | 两条长链共享自由格 | 4 格 |
+| **死链** DeadChain | 起始于 C 型格的链 | — |
+| **死环** DeadCircle | 起始于 C 型格的环 | — |
 
-| 参数 | 值 | 含义 |
-|------|----|------|
-| `UCT_TIMES` | 15,000,000 | UCT 最大迭代次数 |
-| `UCT_LIMIT_TIME` | 1 秒 | UCT 搜索时间上限 |
-| `UCT_MC_TIMES` | 1 | 每次扩展的蒙特卡洛模拟次数 |
-| `UCT_FILTER_RANGE` | 30 | 自由边少于此值时启用 Filter 过滤 |
+### 5. 终局求解器 (`latterSituationMove`)
 
-### 3. 等价裁边（搜索空间优化）
-
-为降低搜索分支因子，AI 在生成可行着法时执行两种裁边：
-
-#### 3.1 死链过滤 `getFilterMoves()`
-
-对每条候选边模拟落子后，检查是否会产生"长死格链"（即一个 C型格通过空边连接到一个链格，形成对手可连续吃掉的结构）。会产生死链的着法被过滤掉。
-
-#### 3.2 等价边裁剪
-
-- **一格短链裁剪** `getSaveChainEdgeBool()`：当一个格子构成仅含 1 个格子的短链时，其多条空边在策略上等价，只保留一条代表。
-- **角落格裁剪** `getSaveAngleEdgeBool()`：棋盘四角的自由格，其两条外边界边等价，只保留一条。
-
-### 4. 链式结构分析（后期核心）
-
-当棋局只剩下长链和环时，AI 基于 **组合博弈论的链式结构理论** 进行精确决策。
-
-#### 4.1 结构类型
-
-| 类型 | 枚举值 | 定义 |
-|------|--------|------|
-| **短链** ShortChain | 长度 ≤ 2 的链 | 由一端自由格出发，经过 1~2 个链格到达另一端 |
-| **长链** LongChain | 长度 ≥ 3 的链 | 同上但经过 ≥ 3 个链格 |
-| **环** Circle | 首尾相连的链格环 | 搜索回到起点形成闭合 |
-| **预备环** PreCircle | 两条长链共享首尾自由格 | 等价于一个大环 |
-| **死链** DeadChain | 起始于 C型格的链 | 已打开、对手可连续吃 |
-| **死环** DeadCircle | 起始于 C型格的环 | 已打开的环形死结构 |
-
-#### 4.2 链的识别流程 `defineAllChains()`
-
-1. **分类所有格子**：根据自由度将 5×5 格子标记为满格、死格、链格、自由格
-2. **从自由格出发搜索链**：沿空边方向，逐格追踪链格序列，直到遇到非链格节点
-3. **从边界出发搜索**：处理一端连接棋盘边界的链
-4. **识别环**：对未被归属的链格，尝试追踪闭合路径
-5. **ChainPlus 模式**：合并共享端点的长链为预备环，处理自由格连接的多条链
-
-#### 4.3 理性状态求解 `getRationalStateBoxNum()`
-
-基于组合博弈论，假设双方都采取最优策略：
-
-- **控制权**：后走方（Latter Player）拥有控制权，决定打开哪条链
-- **牺牲策略**：通过 Double-Cross 手法牺牲少量格子来维持控制权
-- **牺牲代价**：打开一条长链牺牲 2 格，打开一个环牺牲 4 格
+基于 Nim-like 组合博弈论：
 
 ```
-控制者得到的格子 = 总格子 - 牺牲格子数
-牺牲格子数 = 环数 × 4 + 长链数 × 2 - 最后一个结构的代价
+控制者得分 = 总格子 - 牺牲格子数
+牺牲 = Σ环×4 + Σ链×2 - 最后一结构的代价
 ```
 
-判断是否应该放弃控制（全吃）还是牺牲保持控制，取决于：
-> 若 `控制者剩余格子 - 打开者获得格子 ≤ 牺牲代价`，则全吃更优。
-
-#### 4.4 后期决策流程 `latterSituationMove()`
-
-```
-后期决策：
-  ├── 存在已打开的长死链？
-  │    ├── 计算全吃 vs 牺牲的收益对比
-  │    ├── 全吃更优 → eatAllCTypeBoxes() 全部吃掉
-  │    └── 牺牲更优 → 贪心吃到临界点 → Double-Cross → 限制性吃格
-  └── 无已打开的链
-       └── openPolicy() 选择打开哪条链/环：
-           ├── 无长链 → 打开最短的环
-           ├── 无环   → 打开最短的长链
-           ├── 有环但无3-链 → 打开最短的环
-           └── 有3-链 → 优先打开3格长链
-```
-
-#### 4.5 Double-Cross 手法
-
-当决定牺牲时，AI 使用 Double-Cross（双交叉）技巧：
-
-1. 贪心吃掉 C型格直到即将消灭当前死链/死环
-2. 找到死链末端链格的一条空边（非公共边）
-3. 落子该边，故意留下 2 个格子（长链）或 4 个格子（环）给对方
-4. 对方吃完后被迫打开下一条链，己方重新获得控制权
-
-### 5. 前中期预处理 `UCTMoveWithSacrifice()`
-
-在执行 UCT 搜索之前，先检查是否存在死链/死环：
-
-1. 若存在 → 评估是否需要牺牲来保持控制
-2. 牺牲更优时 → 执行 Double-Cross 手法后结束本轮
-3. 全吃更优 / 无死结构 → 吃掉所有 C型格后进入 UCT 搜索
+**打开策略 (`openPolicy`)**：
+- 无长链 → 开最短环
+- 无环 → 开最短长链
+- 有环+无 3-链 → 开最短环
+- 有 3-链 → 优先开 3-链
 
 ---
 
 ## 核心类与接口说明
 
-### `Board` 类（`board.h`）
+### `Board` (`board.h`)
 
-棋盘基础操作类。
-
-| 方法 | 说明 |
-|------|------|
-| `move(player, loc)` | 在指定位置落子，返回占得的格子数 |
-| `unmove(loc)` | 撤销落子（用于搜索回溯） |
-| `getFreedom(x, y)` | 获取格子 `(x,y)` 的自由度（周围空边数） |
-| `ifEnd()` | 判断游戏是否结束（25 格全满） |
-| `getWinner()` | 返回当前胜者（BLACK / WHITE / EMPTY） |
-| `eatCBox(player)` | 吃掉一个 C型格，返回所占边的坐标 |
-| `eatAllCTypeBoxes(player, pace)` | 贪心吃掉所有 C型格 |
-| `ifMakeCBox(loc)` | 判断在 loc 落子是否会制造新的 C型格 |
-| `ifHaveSafeEdge()` | 是否存在不制造 C型格的安全着法 |
-| `getDoubleCrossLoc(player)` | 找到执行 Double-Cross 的目标边坐标 |
-
-### `Node` 类（`Node.h`，继承自 `Board`）
-
-UCT 搜索树节点。
-
-| 成员 | 说明 |
-|------|------|
-| `Owner` | 节点所属玩家 |
-| `Times` | 被访问次数 |
-| `AvgValue` | 平均收益（对父节点而言） |
-| `BoardWinner` | 该局面的预测胜者（0 表示未结束） |
-| `NodeMoves[60]` | 所有候选着法 |
-| `ChildNodes[60]` | 子节点指针数组 |
-| `expandUCTNode()` | 扩展一个新的子节点并进行初始 MC 评估 |
-| `getUCBValue(Total)` | 计算 UCB 值用于节点选择 |
-| `refreshAvgValue()` | 根据子节点更新平均收益 |
-
-### `BoxBoard` 类（`assess.h`，继承自 `Board`）
-
-高级局面评估类，用于链式结构分析和后期决策。
+棋盘基础操作。
 
 | 方法 | 说明 |
-|------|------|
-| `defineAllChains(ChainPlus)` | 识别棋盘上所有链和环结构 |
-| `defineDeadChain()` | 识别所有死链和死环 |
-| `getRationalStateBoxNum()` | 计算理性状态下双方可获得的格子数 |
-| `getBoardWinner(LatterPlayer)` | 预测当前局面最终胜者 |
-| `getFilterMoves(Moves)` | 获取所有过滤后的安全可行边 |
-| `openPolicy()` | 后期打开策略（选择打开哪条链/环） |
-| `captualShortestChain(player)` | 模拟吞并最短的长链/环 |
+|---|---|
+| `move(player, loc)` | 落子，返回占得格子数 |
+| `eatAllCTypeBoxes(player)` | 贪心吃掉所有 C 型格（自由度=1） |
+| `getFilterMoveNum()` | 安全边数量（不产生死链） |
+| `getDoubleCrossLoc(player)` | 找到 Double-Cross 目标边 |
+| `ifEnd()` / `getWinner()` | 终局/胜负判定 |
 
-### 全局函数（`UCT.h`）
+### `BoxBoard` (`assess.h`, 继承 `Board`)
+
+高级局面评估。
+
+| 方法 | 说明 |
+|---|---|
+| `defineAllChains()` | 识别所有链/环/短链结构 |
+| `getRationalStateBoxNum()` | 理性状态双方预期得分 |
+| `getFilterMoves()` | 安全边列表 + 等价裁剪 |
+| `openPolicy()` | 终局打开策略 |
+
+### `az_expert` (`az_expert.h`) — **统一专家层**
 
 | 函数 | 说明 |
-|------|------|
-| `gameTurnMove(CB, Player, status, pace)` | **AI 决策总入口**，自动判断前后期并执行对应策略 |
-| `UCTMove(CB, Player, pace)` | 执行 UCT 搜索并落子 |
-| `UCTMoveWithSacrifice(CB, Player, pace)` | 带牺牲预处理的 UCT 决策 |
-| `latterSituationMove(CB, Player, pace)` | 后期纯链式结构决策 |
-| `UCTProcess(Node, Total)` | UCT 单次迭代（选择→扩展→模拟→回传） |
-| `rndFilterTurn(CB, Player)` | 模拟中的单步过滤随机着法 |
+|---|---|
+| `applyPreSearch(board, player)` | 单次专家处理 → `Decision` (SearchNeeded/GameEnded/TurnEnded/ContinueSamePlayer) |
+| `normalizeToSearch(board, player)` | 循环执行直到需要 NN+MCTS |
+| `isEndgameAfterForcedCaptures()` | 终局判定 |
+
+### `AZMCTS` (`az_mcts.h`)
+
+| 方法 | 说明 |
+|---|---|
+| `search(board, player, config)` | PUCT 搜索，返回根节点 |
+| `selectAction(root, temperature)` | 按访问分布选择动作 |
+| `getVisitDistribution(root)` | 获取 policy 目标 (训练用) |
+
+### `ONNXEvaluator` (`az_onnx_evaluator.h`)
+
+| 方法 | 说明 |
+|---|---|
+| `evaluate(board)` | ONNX Runtime 推理 → policy_logits + value |
+| 输入 | 7×11×11 张量 |
+| 输出 | 60 维 policy logits + 1 维 value [-1,1] |
+
+### 全局函数
+
+| 函数 | 说明 |
+|---|---|
+| `gameTurnMove(CB, Player, status, pace)` | **AI 决策总入口** |
+| `latterSituationMove(CB, Player, pace)` | 终局精确求解 |
+| `AlphaZeroMove(CB, Player, pace)` | GUI AlphaZero 回合循环 |
+| `SelfPlayEngine::playOneGame()` | 前向自对弈（采样根节点） |
+| `SelfPlayEngine::playOneGameBackward()` | 反向自对弈（curriculum） |

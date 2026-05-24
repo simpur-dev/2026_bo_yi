@@ -2,6 +2,7 @@
 #include "az_mcts.h"
 #include "az_action.h"
 #include "az_node.h"
+#include "az_expert.h"
 #include "../assess.h"
 #include "../define.h"
 #include <iostream>
@@ -11,92 +12,6 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
-
-// 前向声明后期决策函数（定义在 UCT.cpp 中）
-void latterSituationMove(Board &CB, int Player, std::vector<LOC> &pace);
-
-// ========== 死链/死环 + Double-Cross 启发式 ==========
-//
-// 与 evaluate_ai_main.cpp 中 playOneGame() 步骤 3 完全一致的预处理。
-// 在 selfplay 中复用，确保训练数据分布与部署一致：
-//
-//   - 若局面存在死链/死环：根据"全吃"vs"牺牲"得分差选择更优方案；
-//     该启发式会取代 MCTS 决策，因此 selfplay 在这种局面下不应采样
-//     训练样本（模型若在此学习，部署时该决策被覆盖→训练信号失效）。
-//
-// 返回值:
-//   0  - 局面不存在死链/死环, 调用方应继续走 MCTS/greedy 决策
-//   1  - 已执行"全吃"路径 (玩家不变, 调用方应 continue 回循环顶)
-//   2  - 已执行"牺牲" Double-Cross 路径 (玩家已切换, 调用方应 continue)
-static int applyDoubleCrossHeuristic(Board &board, int &player, int &moveCount)
-{
-    BoxBoard dead(board);
-    bool deadChain = dead.getDeadChainExist();
-    bool deadCircle = dead.getDeadCircleExist();
-    if (!(deadChain || deadCircle))
-        return 0;
-
-    int sacrificeBoxNum = deadCircle ? 4 : 2;
-    BoxBoard sim(board);
-    sim.eatAllCTypeBoxes(player);
-    LOC boxNum = sim.getEarlyRationalBoxNum();
-
-    if (boxNum.first - boxNum.second <= sacrificeBoxNum)
-    {
-        // 全吃更优 — 不换手, caller continue 后下一轮可能进入 MCTS
-        std::vector<LOC> eatPace;
-        board.eatAllCTypeBoxes(player, eatPace);
-        moveCount += static_cast<int>(eatPace.size());
-        return 1;
-    }
-
-    // 牺牲更优 — 执行 Double-Cross + 后续吃 C 格 + 换手
-    if (sacrificeBoxNum == 2)
-    {
-        for (;;)
-        {
-            Board testBoard = board;
-            testBoard.eatCBox(player);
-            BoxBoard deadTest(testBoard);
-            if (deadTest.getDeadChainExist())
-            {
-                LOC t = board.eatCBox(player);
-                if (t.first >= 0)
-                    moveCount++;
-            }
-            else
-                break;
-        }
-    }
-    else
-    {
-        for (;;)
-        {
-            Board testBoard = board;
-            testBoard.eatCBox(player);
-            BoxBoard deadTest(testBoard);
-            if (deadTest.getDeadCircleExist())
-            {
-                LOC t = board.eatCBox(player);
-                if (t.first >= 0)
-                    moveCount++;
-            }
-            else
-                break;
-        }
-    }
-    LOC dcMove = board.getDoubleCrossLoc(player);
-    board.move(player, dcMove);
-    std::vector<LOC> tempPace;
-    for (;;)
-    {
-        if (!board.getCTypeBoxLimit(player, tempPace))
-            break;
-    }
-    moveCount += 1 + static_cast<int>(tempPace.size());
-    player = -player;
-    return 2;
-}
 
 // ========== 局面阶段检测 ==========
 
@@ -206,48 +121,12 @@ SelfPlayResult SelfPlayEngine::playOneGame(int numSimulations,
 
     while (!board.ifEnd())
     {
-        // 1. 强制吃掉所有 C 型格
-        board.eatAllCTypeBoxes(currentPlayer);
-
-        if (board.ifEnd())
-            break;
-
-        // 2. 检查是否进入终局（只剩长链/环）
         {
-            Board test = board;
-            test.eatAllCTypeBoxes(currentPlayer);
-            if (test.getFilterMoveNum() == 0)
-            {
-                // 终局：使用精确求解器，不生成训练样本
-                std::vector<LOC> pace;
-                latterSituationMove(board, currentPlayer, pace);
-                moveCount += static_cast<int>(pace.size());
-                currentPlayer = -currentPlayer;
-                continue;
-            }
-        }
-
-        // 2.5 死链/死环 + Double-Cross 启发式 (与推理端对齐, 不采样)
-        {
-            int hr = applyDoubleCrossHeuristic(board, currentPlayer, moveCount);
-            if (hr != 0)
-                continue;
-        }
-
-        // 2.6 启发式后再次检查终局
-        if (board.ifEnd())
-            break;
-        {
-            Board test2 = board;
-            test2.eatAllCTypeBoxes(currentPlayer);
-            if (test2.getFilterMoveNum() == 0)
-            {
-                std::vector<LOC> pace;
-                latterSituationMove(board, currentPlayer, pace);
-                moveCount += static_cast<int>(pace.size());
-                currentPlayer = -currentPlayer;
-                continue;
-            }
+            az_expert::Result expert = az_expert::normalizeToSearch(
+                board, currentPlayer, nullptr, az_expert::Options{true});
+            moveCount += expert.moveCount;
+            if (expert.decision == az_expert::Decision::GameEnded)
+                break;
         }
 
         // 3. 记录训练样本的输入特征
@@ -448,47 +327,12 @@ SelfPlayResult SelfPlayEngine::playOneGameBackward(int numSimulations,
 
     while (!board.ifEnd())
     {
-        // 1. 强制吃掉所有 C 型格
-        board.eatAllCTypeBoxes(currentPlayer);
-
-        if (board.ifEnd())
-            break;
-
-        // 2. 检查终局
         {
-            Board test = board;
-            test.eatAllCTypeBoxes(currentPlayer);
-            if (test.getFilterMoveNum() == 0)
-            {
-                std::vector<LOC> pace;
-                latterSituationMove(board, currentPlayer, pace);
-                moveCount += static_cast<int>(pace.size());
-                currentPlayer = -currentPlayer;
-                continue;
-            }
-        }
-
-        // 2.5 死链/死环 + Double-Cross 启发式 (与推理端对齐, 不采样)
-        {
-            int hr = applyDoubleCrossHeuristic(board, currentPlayer, moveCount);
-            if (hr != 0)
-                continue;
-        }
-
-        // 2.6 启发式后再次检查终局
-        if (board.ifEnd())
-            break;
-        {
-            Board test2 = board;
-            test2.eatAllCTypeBoxes(currentPlayer);
-            if (test2.getFilterMoveNum() == 0)
-            {
-                std::vector<LOC> pace;
-                latterSituationMove(board, currentPlayer, pace);
-                moveCount += static_cast<int>(pace.size());
-                currentPlayer = -currentPlayer;
-                continue;
-            }
+            az_expert::Result expert = az_expert::normalizeToSearch(
+                board, currentPlayer, nullptr, az_expert::Options{true});
+            moveCount += expert.moveCount;
+            if (expert.decision == az_expert::Decision::GameEnded)
+                break;
         }
 
         // 3. 判断是否在 MCTS 搜索阶段

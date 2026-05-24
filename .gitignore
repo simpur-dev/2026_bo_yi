@@ -26,6 +26,13 @@ data/models/*.pt
 data/models/*.bin
 data/models/*_desc.txt
 data/models/*.onnx.data
+data/models/archive_old_ckpt/
+data/models/archive_degraded/
+
+# 训练日志
+data/logs/
+data/backward_run1/*.log
+data/backward_run1/*.txt
 
 # Arena 日志
 data/arena_*.log

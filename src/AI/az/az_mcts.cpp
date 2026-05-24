@@ -1,6 +1,7 @@
 #include "az_mcts.h"
 #include "az_action.h"
 #include "az_evaluator.h"
+#include "az_expert.h"
 #include "../assess.h"
 #include "../define.h"
 #include <chrono>
@@ -277,18 +278,8 @@ void AZMCTS::expand(AZNode *node, const NetworkOutput &output)
         Board childBoard = node->board;
         int earned = childBoard.move(node->player, actionToLoc(a));
 
-        // 确定下一个玩家 + 吃 C 型格
-        int nextPlayer;
-        if (earned > 0)
-        {
-            childBoard.eatAllCTypeBoxes(node->player);
-            nextPlayer = node->player;
-        }
-        else
-        {
-            nextPlayer = -node->player;
-            childBoard.eatAllCTypeBoxes(nextPlayer);
-        }
+        int nextPlayer = (earned > 0) ? node->player : -node->player;
+        az_expert::normalizeToSearch(childBoard, nextPlayer, nullptr, az_expert::Options{true});
 
         AZNode *child = new AZNode(childBoard, nextPlayer, a, prior);
 

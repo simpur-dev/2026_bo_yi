@@ -52,6 +52,7 @@ set(AI_SOURCES
         src/AI/az/az_action.cpp
         src/AI/az/az_encoder.cpp
         src/AI/az/az_evaluator.cpp
+        src/AI/az/az_expert.cpp
         src/AI/az/az_node.cpp
         src/AI/az/az_mcts.cpp
         src/AI/az/az_move.cpp

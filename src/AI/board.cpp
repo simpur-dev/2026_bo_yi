@@ -418,7 +418,7 @@ bool Board::getCTypeBoxLimit(int Player, vector<LOC> &pace)
                     pace.emplace_back(x, y + 1); //**记录步伐
                     return true;                 // 占据之后就返回真
                 }
-                else if ((map[x][y - 1] == SHU || map[x][y - 1] == SHU) && !getCTypeBoxBool(x, y - 2))
+                else if ((map[x][y - 1] == HENG || map[x][y - 1] == SHU) && !getCTypeBoxBool(x, y - 2))
                 {
                     move(Player, {x, y - 1});
                     pace.emplace_back(x, y - 1); //*记录步伐

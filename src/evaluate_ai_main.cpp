@@ -4,6 +4,7 @@
 #include "AI/az/az_types.h"
 #include "AI/az/az_evaluator.h"
 #include "AI/az/az_onnx_evaluator.h"
+#include "AI/az/az_expert.h"
 #include "AI/assess.h"
 #include "AI/board.h"
 #include "AI/define.h"
@@ -97,125 +98,12 @@ int playOneGame(AZEvaluator &blackEvaluator,
 
     while (!board.ifEnd() && moveCount < 500)
     {
-        // 1. 吃掉所有 C 型格
-        std::vector<LOC> forcedPace;
-        board.eatAllCTypeBoxes(player, forcedPace);
-        moveCount += static_cast<int>(forcedPace.size());
-
-        if (board.ifEnd())
-            break;
-
-        // 2. 检查终局（只剩长链/环）→ 精确求解
         {
-            Board test = board;
-            test.eatAllCTypeBoxes(player);
-            if (test.getFilterMoveNum() == 0)
-            {
-                std::streambuf *oldBuf = nullptr;
-                if (!verbose)
-                    oldBuf = std::cerr.rdbuf(&nullBuffer);
-                std::vector<LOC> pace;
-                latterSituationMove(board, player, pace);
-                if (!verbose && oldBuf)
-                    std::cerr.rdbuf(oldBuf);
-                moveCount += static_cast<int>(pace.size());
-                player = -player;
-                continue;
-            }
-        }
-
-        // 3. 死链/死环预处理
-        {
-            BoxBoard dead(board);
-            bool deadChain = dead.getDeadChainExist();
-            bool deadCircle = dead.getDeadCircleExist();
-
-            if (deadCircle || deadChain)
-            {
-                int sacrificeBoxNum = deadCircle ? 4 : 2;
-                BoxBoard sim(board);
-                sim.eatAllCTypeBoxes(player);
-                LOC boxNum = sim.getEarlyRationalBoxNum();
-
-                if (boxNum.first - boxNum.second <= sacrificeBoxNum)
-                {
-                    // 全吃更优
-                    std::vector<LOC> eatPace;
-                    board.eatAllCTypeBoxes(player, eatPace);
-                    moveCount += static_cast<int>(eatPace.size());
-                    // 不换手，继续检查
-                }
-                else
-                {
-                    // 牺牲更优：执行 Double-Cross
-                    if (sacrificeBoxNum == 2)
-                    {
-                        for (;;)
-                        {
-                            Board testBoard = board;
-                            testBoard.eatCBox(player);
-                            BoxBoard deadTest(testBoard);
-                            if (deadTest.getDeadChainExist())
-                            {
-                                LOC t = board.eatCBox(player);
-                                if (t.first >= 0)
-                                    moveCount++;
-                            }
-                            else
-                                break;
-                        }
-                    }
-                    else
-                    {
-                        for (;;)
-                        {
-                            Board testBoard = board;
-                            testBoard.eatCBox(player);
-                            BoxBoard deadTest(testBoard);
-                            if (deadTest.getDeadCircleExist())
-                            {
-                                LOC t = board.eatCBox(player);
-                                if (t.first >= 0)
-                                    moveCount++;
-                            }
-                            else
-                                break;
-                        }
-                    }
-                    LOC dcMove = board.getDoubleCrossLoc(player);
-                    board.move(player, dcMove);
-                    std::vector<LOC> tempPace;
-                    for (;;)
-                    {
-                        if (!board.getCTypeBoxLimit(player, tempPace))
-                            break;
-                    }
-                    moveCount += 1 + static_cast<int>(tempPace.size());
-                    player = -player;
-                    continue;
-                }
-            }
-        }
-
-        // 4. 再次检查终局（死链处理后可能进入终局）
-        if (board.ifEnd())
-            break;
-        {
-            Board test2 = board;
-            test2.eatAllCTypeBoxes(player);
-            if (test2.getFilterMoveNum() == 0)
-            {
-                std::streambuf *oldBuf = nullptr;
-                if (!verbose)
-                    oldBuf = std::cerr.rdbuf(&nullBuffer);
-                std::vector<LOC> pace;
-                latterSituationMove(board, player, pace);
-                if (!verbose && oldBuf)
-                    std::cerr.rdbuf(oldBuf);
-                moveCount += static_cast<int>(pace.size());
-                player = -player;
-                continue;
-            }
+            az_expert::Result expert = az_expert::normalizeToSearch(
+                board, player, nullptr, az_expert::Options{!verbose});
+            moveCount += expert.moveCount;
+            if (expert.decision == az_expert::Decision::GameEnded)
+                break;
         }
 
         // 5. 设置评估器

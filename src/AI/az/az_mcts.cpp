@@ -200,18 +200,35 @@ void AZMCTS::simulate(AZNode *root)
     }
 }
 
+// ========== 过滤动作辅助 ==========
+//
+// 使用 assess.cpp 的 getFilterMoves 获取安全边（不产生死链）
+// 减少搜索分支因子，避免探索明显坏招
+
+static std::vector<int> getFilteredActions(const Board &board)
+{
+    Board boardCopy = board;
+    BoxBoard bb(boardCopy);
+    LOC moves[60];
+    int n = bb.getFilterMoves(moves);
+
+    std::vector<int> actions;
+    actions.reserve(n);
+    for (int i = 0; i < n; i++)
+    {
+        int a = locToAction(moves[i]);
+        if (a >= 0)
+            actions.push_back(a);
+    }
+    return actions;
+}
+
 // ========== AZMCTS::expand ==========
 //
-// 设计原则: 不依赖 filter 启发式裁剪分支。让 NN+MCTS 自己学会"什么是好招"。
-//
-// 历史上曾用 getFilteredActions(BoxBoard::getFilterMoves) 仅扩展安全边，
-// 后果是: visit 分布只覆盖 filtered 边，训练 target 在 legal-but-not-filtered
-// 边上恒为 0，等于把 filter 启发式硬编码进 NN——若 filter 偶有错判（如某些
-// 局面下需主动制造 C 格才是最优），模型会学到错误的"避免"。
-//
-// 现在扩展全部 legal actions，保留两项核心优化:
-//   1. 子节点即时终局检测: 创建后立即检查是否终局, 避免浪费 sim
-//   2. 终局传播: 若全部子节点均为终局, 父节点也精确求解
+// 三大优化:
+//   1. 过滤动作剪枝: 只扩展安全边 (不产生死链), 减小分支因子
+//   2. 子节点即时终局检测: 创建后立即检查是否终局, 避免浪费 sim
+//   3. 终局传播: 若全部子节点均为终局, 父节点也精确求解
 //      (形成级联，将大量终局子树不经神经网络直接求解)
 
 void AZMCTS::expand(AZNode *node, const NetworkOutput &output)
@@ -219,8 +236,11 @@ void AZMCTS::expand(AZNode *node, const NetworkOutput &output)
     if (node->expanded || node->terminal)
         return;
 
-    auto expandActions = getLegalActions(node->board);
-    auto &allActions = expandActions; // 名称兼容下面终局判定
+    // 优化 1: 使用过滤动作 (安全边)，减少分支因子
+    // 先尝试过滤招法, 若没有安全边则回退到全部合法招法
+    auto filteredActions = getFilteredActions(node->board);
+    auto allActions = getLegalActions(node->board);
+    auto &expandActions = filteredActions.empty() ? allActions : filteredActions;
 
     if (allActions.empty())
     {

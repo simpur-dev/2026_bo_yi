@@ -43,6 +43,7 @@ int main(int argc, char *argv[])
     // 解析可选参数
     std::string modelPath;
     std::string blackModelPath, whiteModelPath;
+    float blackSimsMult = 1.0f;
     for (int i = 5; i < argc; i++)
     {
         std::string arg = argv[i];
@@ -50,6 +51,8 @@ int main(int argc, char *argv[])
             blackModelPath = argv[++i];
         else if (arg == "--white-model" && i + 1 < argc)
             whiteModelPath = argv[++i];
+        else if (arg == "--black-sims-mult" && i + 1 < argc)
+            blackSimsMult = std::atof(argv[++i]);
         else if (arg[0] != '-')
             modelPath = arg;
     }
@@ -101,6 +104,7 @@ int main(int argc, char *argv[])
     std::cerr << "\n";
 
     SelfPlayEngine engine;
+    engine.setBlackSimsMultiplier(blackSimsMult);
 
     // 设置 teacher 标识
     std::string teacher = (modelPath.empty() && blackModelPath.empty()) ? "heuristic" : "neuralnet";

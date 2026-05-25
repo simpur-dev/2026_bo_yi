@@ -96,6 +96,9 @@ class SelfPlayEngine
     // 设置 teacher 标识（记录数据来源）
     void setTeacher(const std::string &name) { teacherName = name; }
 
+    // 黑方 sims 倍数: 黑方搜索更深以补偿先手劣势
+    void setBlackSimsMultiplier(float mult) { blackSimsMult = mult; }
+
   private:
     // 将样本写入 JSONL 文件 (schema v2)
     void writeSamples(const std::string &filepath,
@@ -106,4 +109,5 @@ class SelfPlayEngine
 
     int gamesPlayed = 0;
     std::string teacherName = "heuristic";
+    float blackSimsMult = 1.0f;
 };

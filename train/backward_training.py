@@ -42,15 +42,18 @@ def resolve_path(path, script_dir, default_value=None):
     return cwd_path
 
 
-def run_backward_selfplay(exe_path, games, sims, start_step, output_dir, model_path="", black_model="", white_model=""):
-    """执行反向自对弈。支持双模型模式 (black_model + white_model)"""
+def run_backward_selfplay(exe_path, games, sims, start_step, output_dir, model_path="", black_model="", white_model="", black_sims_mult=1.0):
+    """执行反向自对弈。支持双模型模式 + 不对称 sims"""
     cmd = [exe_path, str(games), str(sims), str(start_step), output_dir]
     if black_model and white_model:
         cmd.extend(["--black-model", black_model, "--white-model", white_model])
     elif model_path:
         cmd.append(model_path)
+    if black_sims_mult != 1.0:
+        cmd.extend(["--black-sims-mult", str(black_sims_mult)])
 
-    print(f"\n[Selfplay] st={start_step}, games={games}, sims={sims}")
+    print(f"\n[Selfplay] st={start_step}, games={games}, sims={sims}"
+          + (f" (black {black_sims_mult:.1f}x)" if black_sims_mult != 1.0 else ""))
     if black_model and white_model:
         print(f"  Dual: BLACK={black_model}, WHITE={white_model}")
     else:
@@ -413,6 +416,8 @@ def main():
                         help="relative 分侧门槛容忍度。按 N=50/side 二项分布 95%% CI: 1.96*sqrt(0.25/50)=0.139。")
     parser.add_argument("--dual", action="store_true", default=False,
                         help="启用双模型模式: 黑/白各自独立模型, selfplay 对抗训练")
+    parser.add_argument("--black_sims_multiplier", type=float, default=1.0,
+                        help="黑方 sims 倍数: 黑方搜索更深以补偿先手劣势 (推荐 2.0)")
     args = parser.parse_args()
     script_dir = os.path.dirname(os.path.abspath(__file__))
     args.selfplay_exe = resolve_path(args.selfplay_exe, script_dir, parser.get_default("selfplay_exe"))
@@ -512,7 +517,8 @@ def main():
             ok = run_backward_selfplay(
                 args.selfplay_exe, args.games_per_iter, args.simulations,
                 current_st, iter_data_dir,
-                black_model=current_model_black, white_model=current_model_white)
+                black_model=current_model_black, white_model=current_model_white,
+                black_sims_mult=args.black_sims_multiplier)
         else:
             ok = run_backward_selfplay(
                 args.selfplay_exe, args.games_per_iter, args.simulations,
@@ -541,6 +547,7 @@ def main():
                 ("black", black_dir, best_pt_black, best_pt_black, onnx_black),
                 ("white", white_dir, best_pt_white, best_pt_white, onnx_white),
             ]:
+                print(f"\n  [{color.upper()}] Starting training...")
                 run_name = f"backward_st{current_st}_iter{total_iterations}_{color}"
                 value_mode = "q" if stage == 1 else args.stage2_value_mode
                 resume = resume_pt if os.path.exists(resume_pt) else None
@@ -589,15 +596,20 @@ def main():
                     promoted = winrate >= args.promote_threshold
 
                 if promoted:
-                    shutil.copy2(pt_path, best_pt)
-                    shutil.copy2(candidate_onnx, onnx_path)
-                    if color == "black":
-                        current_model_black = onnx_path
-                        promoted_black = True
-                    else:
-                        current_model_white = onnx_path
-                        promoted_white = True
-                    print(f"  [Promote] {color} candidate promoted (arena winrate={winrate:.3f})")
+                    try:
+                        if os.path.exists(pt_path):
+                            shutil.copy2(pt_path, best_pt)
+                        if os.path.exists(candidate_onnx):
+                            shutil.copy2(candidate_onnx, onnx_path)
+                        if color == "black":
+                            current_model_black = onnx_path
+                            promoted_black = True
+                        else:
+                            current_model_white = onnx_path
+                            promoted_white = True
+                        print(f"  [Promote] {color} candidate promoted (arena winrate={winrate:.3f})")
+                    except Exception as e:
+                        print(f"  [Promote] {color} copy failed: {e}")
                 else:
                     print(f"  [Reject] {color} candidate rejected (arena winrate={winrate:.3f})")
         else:

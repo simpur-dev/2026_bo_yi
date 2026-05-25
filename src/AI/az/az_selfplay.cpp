@@ -142,7 +142,8 @@ SelfPlayResult SelfPlayEngine::playOneGame(int numSimulations,
 
         // 4. PUCT 搜索（自对弈模式：启用 Dirichlet 噪声）
         selectEvaluatorForColor(currentPlayer);
-        MCTSConfig config = MCTSConfig::selfPlay(numSimulations);
+        int sims = (currentPlayer == BLACK) ? int(numSimulations * blackSimsMult) : numSimulations;
+        MCTSConfig config = MCTSConfig::selfPlay(sims);
         AZMCTS mcts;
         AZNode *root = mcts.search(board, currentPlayer, config);
 
@@ -397,7 +398,8 @@ SelfPlayResult SelfPlayEngine::playOneGameBackward(int numSimulations,
             sample.phase = detectPhase(board);
 
             selectEvaluatorForColor(currentPlayer);
-            MCTSConfig config = MCTSConfig::selfPlay(numSimulations);
+            int sims = (currentPlayer == BLACK) ? int(numSimulations * blackSimsMult) : numSimulations;
+            MCTSConfig config = MCTSConfig::selfPlay(sims);
             AZMCTS mcts;
             AZNode *root = mcts.search(board, currentPlayer, config);
 

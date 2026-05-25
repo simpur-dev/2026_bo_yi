@@ -6,14 +6,15 @@
 
 - [项目简介](#项目简介)
 - [当前状态](#当前状态)
+- [环境配置](#环境配置)
 - [项目结构](#项目结构)
-- [环境要求](#环境要求)
 - [编译与运行](#编译与运行)
 - [训练流程](#训练流程)
-- [游戏操作说明](#游戏操作说明)
-- [棋盘数据结构](#棋盘数据结构)
+- [双模型架构](#双模型架构)
 - [AI 算法详解](#ai-算法详解)
 - [核心类与接口说明](#核心类与接口说明)
+- [游戏操作说明](#游戏操作说明)
+- [棋盘数据结构](#棋盘数据结构)
 
 ---
 
@@ -33,11 +34,23 @@
 
 | 指标 | 值 |
 |---|---|
-| 最强模型 | iter18 (ResNet-S, 330K) → iter22 ResNet-M (1.83M) 实验中 |
-| vs heuristic | 72% 胜率 (ResNet-S 天花板) |
+| 最强模型 | resnet_m (1.83M) — iter22 内部 arena 75% |
+| vs heuristic | 72% (ResNet-S 天花板, 待双模型突破) |
 | 白方 (后手) | 100% vs iter18 基线 |
-| 训练数据 | 41K 样本, 21 轮反向训练迭代 |
-| 架构版本 | Hybrid Expert v1 + 1-chain/2-chain 终局扩展 |
+| 训练数据 | 41K+ 样本, 22 轮反向训练迭代 |
+| 架构 | Hybrid Expert v1 + 1-chain/2-chain + 双模型 (black/white) |
+| GPU 推理 | RTX 4070, ONNX CUDA, 3-17× 加速 |
+
+---
+
+## 环境配置
+
+详细环境配置指南见 **[SETUP.md](SETUP.md)**。涵盖：
+
+- GCC / CMake / SFML / ONNX Runtime C++ SDK 安装
+- Python PyTorch + ONNX Runtime GPU 配置
+- GPU CUDA DLL 自动部署
+- 编译与验证步骤
 
 ---
 
@@ -330,6 +343,27 @@ bool isFreeLine = (map[i][j] == HENG || map[i][j] == SHU);
 // 判断一个格子是否空（未被任何玩家占领）
 bool isEmpty = (map[i][j] == BOX);  // BOX == EMPTY == 0
 ```
+
+---
+
+## 双模型架构
+
+针对 5×5 点格棋先手（黑方）系统性劣势，**黑白双方各自拥有独立的神经网络模型**。
+
+```
+selfplay: black_model (BLACK) vs white_model (WHITE)
+training: black_model ← BLACK 视角样本, white_model ← WHITE 视角样本
+arena:    black arena (fixed-color) + white arena (fixed-color)独立晋升
+```
+
+| 组件 | 单模型模式 | 双模型模式 |
+|---|---|---|
+| 模型文件 | `backward_model.onnx` | `backward_model_black.onnx` + `backward_model_white.onnx` |
+| selfplay | `backward_selfplay ... model.onnx` | `backward_selfplay ... --black-model b.onnx --white-model w.onnx` |
+| arena | `evaluate_ai 50 A B` | `evaluate_ai 25 A B --fixed-color` |
+| 训练 | `python backward_training.py` | `python backward_training.py --dual` |
+
+**初始化：** 首次启用 `--dual` 时，自动从当前最佳单模型复制权重到黑白两个模型。
 
 ---
 

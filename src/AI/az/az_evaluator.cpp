@@ -24,6 +24,34 @@ void setEvaluator(AZEvaluator *evaluator)
         globalEvaluator = evaluator;
 }
 
+// ========== 双模型支持 ==========
+
+static AZEvaluator *blackEvaluator = nullptr;
+static AZEvaluator *whiteEvaluator = nullptr;
+
+void setEvaluatorBlack(AZEvaluator *evaluator)
+{
+    blackEvaluator = evaluator;
+}
+
+void setEvaluatorWhite(AZEvaluator *evaluator)
+{
+    whiteEvaluator = evaluator;
+}
+
+bool hasDualEvaluators()
+{
+    return blackEvaluator != nullptr && whiteEvaluator != nullptr;
+}
+
+void selectEvaluatorForColor(int player)
+{
+    if (player == BLACK && blackEvaluator)
+        globalEvaluator = blackEvaluator;
+    else if (player == WHITE && whiteEvaluator)
+        globalEvaluator = whiteEvaluator;
+}
+
 // ========== 启发式评估器实现 ==========
 
 // 对每条合法边评分的辅助函数

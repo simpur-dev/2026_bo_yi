@@ -43,6 +43,13 @@ class NeuralNetEvaluator : public AZEvaluator
 AZEvaluator &getEvaluator();
 void setEvaluator(AZEvaluator *evaluator);
 
+// 双模型支持: 按当前玩家颜色选择评估器
+// 设置黑白各自专用的评估器, 之后 selectEvaluatorForColor() 自动切换
+void setEvaluatorBlack(AZEvaluator *evaluator);
+void setEvaluatorWhite(AZEvaluator *evaluator);
+bool hasDualEvaluators();
+void selectEvaluatorForColor(int player);  // BLACK -> black evaluator, WHITE -> white
+
 // 便捷函数：尝试加载 MLP 神经网络，如加载失败则使用启发式评估器
 bool tryLoadNeuralNet(const std::string &weightPath);
 

@@ -49,12 +49,16 @@ class ONNXEvaluator : public AZEvaluator
     std::vector<std::string> outputNamesOwned;
 };
 
-// 便捷函数：尝试加载 ONNX 模型
+// 便捷函数：尝试加载 ONNX 模型 (单例, 向后兼容)
 bool tryLoadOnnxModel(const std::string &onnxPath);
+
+// 创建独立的 ONNX 评估器实例 (用于双模型)
+ONNXEvaluator *createOnnxEvaluator(const std::string &onnxPath);
 
 #else
 
 // ONNX 未启用时的空实现
 inline bool tryLoadOnnxModel(const std::string &) { return false; }
+inline ONNXEvaluator *createOnnxEvaluator(const std::string &) { return nullptr; }
 
 #endif // USE_ONNX

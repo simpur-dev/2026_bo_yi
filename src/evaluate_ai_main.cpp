@@ -247,9 +247,10 @@ int main(int argc, char *argv[])
     {
         std::cerr << "Usage: evaluate_ai <games_per_side> <modelA|heuristic> <modelB|heuristic> [options]\n";
         std::cerr << "Options:\n";
-        std::cerr << "  --sims N       MCTS simulations per move (default: 800)\n";
-        std::cerr << "  --temp N       Temperature moves for diversity (default: 4, 0=deterministic)\n";
-        std::cerr << "  --verbose      Print detailed move info\n";
+        std::cerr << "  --sims N        MCTS simulations per move (default: 800)\n";
+        std::cerr << "  --temp N        Temperature moves for diversity (default: 4, 0=deterministic)\n";
+        std::cerr << "  --verbose       Print detailed move info\n";
+        std::cerr << "  --fixed-color   A always BLACK, B always WHITE (no side swap)\n";
         return 1;
     }
 
@@ -261,6 +262,7 @@ int main(int argc, char *argv[])
     int simulations = 800;
     int tempMoves = 4;
     bool verbose = false;
+    bool fixedColor = false;
     for (int i = 4; i < argc; i++)
     {
         std::string arg = argv[i];
@@ -270,6 +272,8 @@ int main(int argc, char *argv[])
             tempMoves = std::atoi(argv[++i]);
         else if (arg == "--verbose")
             verbose = true;
+        else if (arg == "--fixed-color")
+            fixedColor = true;
     }
 
     PlayerConfig a;
@@ -296,10 +300,20 @@ int main(int argc, char *argv[])
     stats.simulations = simulations;
     stats.tempMoves = tempMoves;
     int gameIndex = 1;
-    for (int i = 0; i < gamesPerSide; i++)
-        runGame(stats, a, b, true, gameIndex++, verbose);
-    for (int i = 0; i < gamesPerSide; i++)
-        runGame(stats, a, b, false, gameIndex++, verbose);
+    if (fixedColor)
+    {
+        // A always BLACK, B always WHITE — for dual model per-color arena
+        std::cout << "Mode: fixed-color (A=BLACK, B=WHITE)\n";
+        for (int i = 0; i < gamesPerSide; i++)
+            runGame(stats, a, b, true, gameIndex++, verbose);
+    }
+    else
+    {
+        for (int i = 0; i < gamesPerSide; i++)
+            runGame(stats, a, b, true, gameIndex++, verbose);
+        for (int i = 0; i < gamesPerSide; i++)
+            runGame(stats, a, b, false, gameIndex++, verbose);
+    }
 
     printSummary(stats);
     return 0;

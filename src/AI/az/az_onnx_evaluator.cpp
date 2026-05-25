@@ -24,6 +24,21 @@ bool ONNXEvaluator::loadModel(const std::string &onnxPath)
         sessionOptions.SetIntraOpNumThreads(1);
         sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
+        // 优先使用 CUDA GPU 推理，失败则回退 CPU
+        try
+        {
+            OrtCUDAProviderOptions cudaOptions;
+            cudaOptions.device_id = 0;
+            cudaOptions.arena_extend_strategy = 0;
+            cudaOptions.do_copy_in_default_stream = 1;
+            sessionOptions.AppendExecutionProvider_CUDA(cudaOptions);
+            std::cerr << "[ONNXEvaluator] CUDA provider enabled (GPU 0)\n";
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "[ONNXEvaluator] CUDA unavailable, falling back to CPU: " << e.what() << "\n";
+        }
+
 #ifdef _WIN32
         // Windows 需要宽字符路径
         std::wstring widePath(onnxPath.begin(), onnxPath.end());
@@ -189,6 +204,22 @@ bool tryLoadOnnxModel(const std::string &onnxPath)
     {
         std::cerr << "[AZ] Failed to load ONNX model, using current evaluator\n";
         return false;
+    }
+}
+
+ONNXEvaluator *createOnnxEvaluator(const std::string &onnxPath)
+{
+    ONNXEvaluator *evaluator = new ONNXEvaluator();
+    if (evaluator->loadModel(onnxPath))
+    {
+        std::cerr << "[AZ] Created ONNXEvaluator for: " << onnxPath << "\n";
+        return evaluator;
+    }
+    else
+    {
+        std::cerr << "[AZ] Failed to create ONNXEvaluator for: " << onnxPath << "\n";
+        delete evaluator;
+        return nullptr;
     }
 }
 

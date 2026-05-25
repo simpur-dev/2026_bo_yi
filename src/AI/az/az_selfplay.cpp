@@ -3,6 +3,7 @@
 #include "az_action.h"
 #include "az_node.h"
 #include "az_expert.h"
+#include "az_evaluator.h"
 #include "../assess.h"
 #include "../define.h"
 #include <iostream>
@@ -140,6 +141,7 @@ SelfPlayResult SelfPlayEngine::playOneGame(int numSimulations,
         sample.phase = detectPhase(board);
 
         // 4. PUCT 搜索（自对弈模式：启用 Dirichlet 噪声）
+        selectEvaluatorForColor(currentPlayer);
         MCTSConfig config = MCTSConfig::selfPlay(numSimulations);
         AZMCTS mcts;
         AZNode *root = mcts.search(board, currentPlayer, config);
@@ -394,6 +396,7 @@ SelfPlayResult SelfPlayEngine::playOneGameBackward(int numSimulations,
             sample.decisionIndex = decisionCount;
             sample.phase = detectPhase(board);
 
+            selectEvaluatorForColor(currentPlayer);
             MCTSConfig config = MCTSConfig::selfPlay(numSimulations);
             AZMCTS mcts;
             AZNode *root = mcts.search(board, currentPlayer, config);

@@ -120,10 +120,39 @@ IF (WIN32)
 # 复制dll（仅新编译的 SFML + ONNX Runtime）
 file(GLOB SFML_NEW_DLL 3rdparty/SFML_new/bin/*.dll)
 set(PROJECT_DLL ${SFML_NEW_DLL})
-if(USE_ONNX AND EXISTS "${ONNXRUNTIME_DIR}/bin/onnxruntime.dll")
-    list(APPEND PROJECT_DLL "${ONNXRUNTIME_DIR}/bin/onnxruntime.dll")
-elseif(USE_ONNX AND EXISTS "${ONNXRUNTIME_DIR}/lib/onnxruntime.dll")
-    list(APPEND PROJECT_DLL "${ONNXRUNTIME_DIR}/lib/onnxruntime.dll")
+if(USE_ONNX)
+    # 主 DLL
+    if(EXISTS "${ONNXRUNTIME_DIR}/bin/onnxruntime.dll")
+        list(APPEND PROJECT_DLL "${ONNXRUNTIME_DIR}/bin/onnxruntime.dll")
+    elseif(EXISTS "${ONNXRUNTIME_DIR}/lib/onnxruntime.dll")
+        list(APPEND PROJECT_DLL "${ONNXRUNTIME_DIR}/lib/onnxruntime.dll")
+    endif()
+    # GPU provider DLLs (CUDA)
+    foreach(provider_dll onnxruntime_providers_cuda onnxruntime_providers_shared)
+        if(EXISTS "${ONNXRUNTIME_DIR}/bin/${provider_dll}.dll")
+            list(APPEND PROJECT_DLL "${ONNXRUNTIME_DIR}/bin/${provider_dll}.dll")
+        elseif(EXISTS "${ONNXRUNTIME_DIR}/lib/${provider_dll}.dll")
+            list(APPEND PROJECT_DLL "${ONNXRUNTIME_DIR}/lib/${provider_dll}.dll")
+        endif()
+    endforeach()
+    # CUDA runtime DLLs (from PyTorch installation)
+    if(WIN32)
+        execute_process(
+            COMMAND python -c "import torch; from pathlib import Path; print(Path(torch.__file__).parent / 'lib')"
+            OUTPUT_VARIABLE TORCH_LIB_DIR
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(TORCH_LIB_DIR AND EXISTS "${TORCH_LIB_DIR}")
+            foreach(cuda_dll cublas64_12 cublasLt64_12 cudart64_12 cudnn64_9 cudnn_adv64_9
+                             cudnn_cnn64_9 cudnn_graph64_9 cudnn_heuristic64_9 cudnn_ops64_9
+                             cufft64_11 curand64_10 cusolver64_11 cusparse64_12)
+                if(EXISTS "${TORCH_LIB_DIR}/${cuda_dll}.dll")
+                    list(APPEND PROJECT_DLL "${TORCH_LIB_DIR}/${cuda_dll}.dll")
+                endif()
+            endforeach()
+        endif()
+    endif()
 endif()
 add_custom_command(TARGET dots_and_boxes POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy

@@ -41,7 +41,8 @@ std::string SelfPlayEngine::detectPhase(const Board &board)
 
 // ========== SelfPlayEngine::run ==========
 
-void SelfPlayEngine::run(int numGames, int numSimulations, const std::string &outputDir)
+void SelfPlayEngine::run(int numGames, int numSimulations, const std::string &outputDir,
+                         float temperature, int temperatureMoves)
 {
     // 确保输出目录存在
     std::filesystem::create_directories(outputDir);
@@ -56,10 +57,13 @@ void SelfPlayEngine::run(int numGames, int numSimulations, const std::string &ou
 
     for (int g = 0; g < numGames; g++)
     {
+        // 新对局开始，重置搜索树缓存
+        resetSearchTree();
+
         auto gameStart = std::chrono::steady_clock::now();
 
         std::vector<SelfPlaySample> gameSamples;
-        SelfPlayResult result = playOneGame(numSimulations, 1.0f, 20, gameSamples);
+        SelfPlayResult result = playOneGame(numSimulations, temperature, temperatureMoves, gameSamples);
 
         auto gameEnd = std::chrono::steady_clock::now();
         int gameMs = static_cast<int>(
@@ -141,11 +145,13 @@ SelfPlayResult SelfPlayEngine::playOneGame(int numSimulations,
         sample.phase = detectPhase(board);
 
         // 4. PUCT 搜索（自对弈模式：启用 Dirichlet 噪声）
+        //    使用子树复用：将上一步搜索树的子树提升为新根，减少重复计算
         selectEvaluatorForColor(currentPlayer);
         int sims = (currentPlayer == BLACK) ? int(numSimulations * blackSimsMult) : numSimulations;
-        MCTSConfig config = MCTSConfig::selfPlay(sims);
+        bool evalThisPlayer = evalBlack && (currentPlayer == BLACK);
+        MCTSConfig config = evalThisPlayer ? MCTSConfig::evaluation(sims) : MCTSConfig::selfPlay(sims);
         AZMCTS mcts;
-        AZNode *root = mcts.search(board, currentPlayer, config);
+        AZNode *root = mcts.search(board, currentPlayer, config, previousRoot, prevAction);
 
         // 记录策略（访问次数分布）
         sample.policy = mcts.getVisitDistribution(root);
@@ -163,13 +169,18 @@ SelfPlayResult SelfPlayEngine::playOneGame(int numSimulations,
         sample.rootEntropy = entropy;
         sample.rootQ = root->Q();
 
-        // 5. 选择动作（前 N 步温度采样，之后贪心）
-        float temp = (moveCount < temperatureMoves) ? temperature : 0.0f;
+        // 5. 选择动作（渐进温度：前 temperatureMoves 步内线性降温，之后贪心）
+        //    比硬切换更平滑的探索-利用平衡
+        float tempProgress = 0.0f;
+        if (temperatureMoves > 0)
+            tempProgress = std::min(static_cast<float>(moveCount) / static_cast<float>(temperatureMoves), 1.0f);
+        float temp = temperature * (1.0f - tempProgress);
         int action = mcts.selectAction(root, temp);
 
-        // 释放搜索树
-        deleteAZTree(root);
-        delete root;
+        // 保存当前树和动作供下一步复用
+        // 注意：如果下一步专家归一化改变了棋盘，reuseSubtree 会自动检测并回退
+        prevAction = action;
+        previousRoot = root; // 转移所有权，不要再 deleteAZTree(root)
 
         if (action < 0)
         {
@@ -244,7 +255,8 @@ SelfPlayResult SelfPlayEngine::playOneGame(int numSimulations,
 // ========== SelfPlayEngine::runBackward ==========
 
 void SelfPlayEngine::runBackward(int numGames, int numSimulations,
-                                  int startSearchStep, const std::string &outputDir)
+                                  int startSearchStep, const std::string &outputDir,
+                                  float temperature, int temperatureMoves)
 {
     std::filesystem::create_directories(outputDir);
     std::vector<SelfPlaySample> allSamples;
@@ -261,7 +273,7 @@ void SelfPlayEngine::runBackward(int numGames, int numSimulations,
 
         std::vector<SelfPlaySample> gameSamples;
         SelfPlayResult result = playOneGameBackward(
-            numSimulations, startSearchStep, 1.0f, 10, gameSamples);
+            numSimulations, startSearchStep, temperature, temperatureMoves, gameSamples);
 
         auto gameEnd = std::chrono::steady_clock::now();
         int gameMs = static_cast<int>(
@@ -399,7 +411,9 @@ SelfPlayResult SelfPlayEngine::playOneGameBackward(int numSimulations,
 
             selectEvaluatorForColor(currentPlayer);
             int sims = (currentPlayer == BLACK) ? int(numSimulations * blackSimsMult) : numSimulations;
-            MCTSConfig config = MCTSConfig::selfPlay(sims);
+            // league: 黑方 evaluation 模式 vs 启发式 (无噪声, 发挥真实实力)
+            bool evalThisPlayer = evalBlack && (currentPlayer == BLACK);
+            MCTSConfig config = evalThisPlayer ? MCTSConfig::evaluation(sims) : MCTSConfig::selfPlay(sims);
             AZMCTS mcts;
             AZNode *root = mcts.search(board, currentPlayer, config);
 
@@ -417,9 +431,11 @@ SelfPlayResult SelfPlayEngine::playOneGameBackward(int numSimulations,
             sample.rootEntropy = entropy;
             sample.rootQ = root->Q();
 
-            // 选择动作
-            int mctsDecisions = decisionCount; // MCTS 决策序号
-            float temp = (mctsDecisions < temperatureMoves) ? temperature : 0.0f;
+            // 渐进温度：在 temperatureMoves 步内线性降温
+            float tempProgress = 0.0f;
+            if (temperatureMoves > 0)
+                tempProgress = std::min(static_cast<float>(decisionCount) / static_cast<float>(temperatureMoves), 1.0f);
+            float temp = temperature * (1.0f - tempProgress);
             int action = mcts.selectAction(root, temp);
 
             deleteAZTree(root);

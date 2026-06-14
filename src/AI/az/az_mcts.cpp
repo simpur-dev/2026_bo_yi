@@ -10,6 +10,7 @@
 #include <random>
 #include <numeric>
 #include <iostream>
+#include <cstring>
 
 static std::mt19937 azRng(std::random_device{}());
 
@@ -59,6 +60,8 @@ AZNode *AZMCTS::search(const Board &board, int player, const MCTSConfig &config)
         return root;
 
     // 对根节点执行初次评估和扩展
+    // 双模型模式: 按当前玩家颜色选择对应评估器 (单模型模式下为 no-op)
+    selectEvaluatorForColor(player);
     NetworkOutput rootOutput = getEvaluator().evaluate(board, player);
     expand(root, rootOutput);
 
@@ -104,6 +107,153 @@ AZNode *AZMCTS::search(const Board &board, int player, int numSimulations, int t
     return search(board, player, MCTSConfig::evaluation(numSimulations, timeLimitMs));
 }
 
+// ========== 子树复用 ==========
+//
+// 传统 AlphaZero 每步重建整棵树，浪费大量计算。
+// 这里实现简化版子树复用：将上一步所选动作对应的子树提升为新根节点，
+// 只对新分支和旧子树的补充进行搜索，其余保持不变。
+//
+// 注意：由于 Board 对象按值传递且可能因 C 型格归一化而改变，
+// 这里采用"引用匹配"策略：检查上一步根节点的子节点中，
+// 是否有子节点的 lastAction == prevAction，且子节点棋盘与当前棋盘一致。
+// 如果一致，直接复用该子树（已包含历史搜索信息）。
+// 如果棋盘因专家归一化而不一致，安全回退到新建树。
+
+AZNode *AZMCTS::reuseSubtree(const Board &board, int player,
+                              AZNode *&previousRoot, int prevAction)
+{
+    if (!previousRoot || prevAction < 0)
+    {
+        AZNode *newRoot = new AZNode(board, player, -1, 0.0f);
+        deleteAZTree(previousRoot);
+        delete previousRoot;
+        previousRoot = nullptr;
+        return newRoot;
+    }
+
+    AZNode *reused = nullptr;
+    for (auto *child : previousRoot->children)
+    {
+        if (child->action == prevAction)
+        {
+            reused = child;
+            break;
+        }
+    }
+
+    if (!reused)
+    {
+        AZNode *newRoot = new AZNode(board, player, -1, 0.0f);
+        deleteAZTree(previousRoot);
+        delete previousRoot;
+        previousRoot = nullptr;
+        return newRoot;
+    }
+
+    if (std::memcmp(reused->board.map, board.map, sizeof(board.map)) != 0)
+    {
+        AZNode *newRoot = new AZNode(board, player, -1, 0.0f);
+        deleteAZTree(previousRoot);
+        delete previousRoot;
+        previousRoot = nullptr;
+        return newRoot;
+    }
+
+    // 棋盘匹配！将子树提升为新根节点
+    AZNode *newRoot = reused;
+
+    // 将子树从旧根节点中脱离（避免双重释放）
+    // 通过遍历移除（避免 vector erase 的 O(n) 查找）
+    auto &oldChildren = previousRoot->children;
+    for (auto it = oldChildren.begin(); it != oldChildren.end(); ++it)
+    {
+        if (*it == reused)
+        {
+            oldChildren.erase(it);
+            break;
+        }
+    }
+
+    // 更新新根节点的 action 为 -1（表示它是搜索的起点）
+    newRoot->action = -1;
+
+    // 消耗旧根节点（子树已被提升，不再需要旧根）
+    deleteAZTree(previousRoot);
+    delete previousRoot;
+    previousRoot = nullptr;
+
+    return newRoot;
+}
+
+// 带子树复用的搜索重载
+AZNode *AZMCTS::search(const Board &board, int player, const MCTSConfig &config,
+                       AZNode *&previousRoot, int prevAction)
+{
+    config_ = config;
+
+    // 尝试复用子树
+    AZNode *root = reuseSubtree(board, player, previousRoot, prevAction);
+
+    // 重置根节点统计（子树的 visits/valueSum 保留历史信息，这是期望行为）
+    // 如果返回的是全新节点，visits=0/valueSum=0，自然从零开始
+
+    // 检查根节点是否已是终局
+    if (checkAndMarkTerminal(root))
+        return root;
+
+    // 如果根节点尚未展开（全新节点或复用但未展开），执行初次评估和扩展
+    if (!root->expanded)
+    {
+        selectEvaluatorForColor(player);
+        NetworkOutput rootOutput = getEvaluator().evaluate(board, player);
+        expand(root, rootOutput);
+    }
+    else if (root->player != player)
+    {
+        // 复用子树但玩家不同（理论上不应发生，因为棋盘匹配时玩家相同）
+        // 安全起见：标记为需重新展开
+        root->expanded = false;
+        root->terminal = false;
+        root->terminalValue = 0.0f;
+        root->children.clear();
+        selectEvaluatorForColor(player);
+        NetworkOutput rootOutput = getEvaluator().evaluate(board, player);
+        expand(root, rootOutput);
+    }
+
+    // 仅在自对弈模式下添加 Dirichlet 噪声
+    if (config_.addRootNoise && root->children.size() > 0)
+        addDirichletNoise(root, config_.dirichletAlpha, config_.dirichletFrac);
+
+    // 搜索主循环
+    auto startTime = std::chrono::steady_clock::now();
+    constexpr int TIME_CHECK_INTERVAL = 64;
+
+    int sim = 0;
+    for (; sim < config_.simulations; sim++)
+    {
+        if (config_.timeLimitMs > 0 && (sim & (TIME_CHECK_INTERVAL - 1)) == 0 && sim > 0)
+        {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
+            if (elapsed >= config_.timeLimitMs)
+                break;
+        }
+
+        simulate(root);
+
+        if (root->terminal)
+            break;
+    }
+
+    auto endTime = std::chrono::steady_clock::now();
+    int elapsed = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count());
+    AZSearchStats stats = getSearchStats(root, elapsed);
+    std::cerr << stats.toString() << "\n";
+
+    return root;
+}
+
 // ========== AZMCTS::simulate ==========
 //
 // 一次完整的 PUCT 迭代:
@@ -143,6 +293,11 @@ void AZMCTS::simulate(AZNode *root)
     {
         // ---- 3. Expansion ----
         // 正常局面：调用评估器获取 policy + value，然后扩展
+        // ★ 关键: 双模型模式下，每个叶节点必须按 leaf->player 切换评估器
+        //   单模型模式下 selectEvaluatorForColor 为 no-op，行为不变
+        //   旧代码 bug: 全局 evaluator 只在外层 turn 切换时按根节点设置一次，
+        //   MCTS 内部所有 white-to-move 节点都被错误地用 black 模型评估，反之亦然
+        selectEvaluatorForColor(node->player);
         NetworkOutput output = getEvaluator().evaluate(node->board, node->player);
         expand(node, output);
 

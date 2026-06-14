@@ -39,6 +39,8 @@ struct MatchStats
     int bAsWhiteWins = 0;
     int blackScoreSum = 0;
     int whiteScoreSum = 0;
+    int aScoreSum = 0;            // A 总得分（不分颜色）
+    int bScoreSum = 0;            // B 总得分（不分颜色）
     int simulations = 800;
     int tempMoves = 4;
 };
@@ -182,6 +184,10 @@ void runGame(MatchStats &stats,
     stats.games++;
     stats.blackScoreSum += blackScore;
     stats.whiteScoreSum += whiteScore;
+    // 按 agent 累加得分：swap-color 下 A 一半盘黑、一半盘白，
+    // A-B margin 是颜色对称的连续量，适合作为晋级门槛
+    stats.aScoreSum += aIsBlack ? blackScore : whiteScore;
+    stats.bScoreSum += aIsBlack ? whiteScore : blackScore;
 
     bool aWon = (aIsBlack && winner == BLACK) || (!aIsBlack && winner == WHITE);
     bool bWon = (aIsBlack && winner == WHITE) || (!aIsBlack && winner == BLACK);
@@ -235,9 +241,20 @@ void printSummary(const MatchStats &stats)
     if (stats.games > 0)
     {
         double aWinRate = 100.0 * stats.aWins / stats.games;
+        double avgA = static_cast<double>(stats.aScoreSum) / stats.games;
+        double avgB = static_cast<double>(stats.bScoreSum) / stats.games;
+        double margin = avgA - avgB;
         std::cout << "A winrate: " << std::fixed << std::setprecision(1) << aWinRate << "%\n";
-        std::cout << "Avg score BLACK: " << static_cast<double>(stats.blackScoreSum) / stats.games << "\n";
-        std::cout << "Avg score WHITE: " << static_cast<double>(stats.whiteScoreSum) / stats.games << "\n";
+        std::cout << "Avg score BLACK: " << std::fixed << std::setprecision(2)
+                  << static_cast<double>(stats.blackScoreSum) / stats.games << "\n";
+        std::cout << "Avg score WHITE: " << std::fixed << std::setprecision(2)
+                  << static_cast<double>(stats.whiteScoreSum) / stats.games << "\n";
+        std::cout << "Avg score A: " << std::fixed << std::setprecision(2) << avgA << "\n";
+        std::cout << "Avg score B: " << std::fixed << std::setprecision(2) << avgB << "\n";
+        // A-B margin: A 资高于 B 多少格。颜色对称，主要晋级指标
+        // 正值 = A 在总分上胜 B；负值 = A 输。
+        // 5x5 总格数 25，随机同强度下期望为 0，margin >= +0.5 代表稳定优势
+        std::cout << "A-B margin: " << std::fixed << std::setprecision(3) << margin << "\n";
     }
 }
 

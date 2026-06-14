@@ -36,6 +36,12 @@ class AZMCTS
     // 兼容旧接口（默认 evaluation 模式，无噪声）
     AZNode *search(const Board &board, int player, int numSimulations, int timeLimitMs);
 
+    // 带子树复用的搜索：previousRoot 是上一步的根节点，prevAction 是上一步选择的动作
+    // 如果 previousRoot 中有 prevAction 对应的子树且棋盘匹配，直接复用该子树
+    // previousRoot 会被消耗（delete），传入后不应再使用
+    AZNode *search(const Board &board, int player, const MCTSConfig &config,
+                   AZNode *&previousRoot, int prevAction);
+
     // 选择最佳动作
     // temperature = 0: 贪心选访问次数最多的
     // temperature > 0: 按 visits^(1/T) 的概率采样（用于自对弈训练）
@@ -52,6 +58,10 @@ class AZMCTS
 
     // 单次 PUCT 迭代
     void simulate(AZNode *root);
+
+    // 尝试从 previousRoot 复用子树，如果成功返回复用后的根节点并消耗 previousRoot
+    // 如果失败（棋盘不匹配/子节点不存在），返回新建根节点并消耗 previousRoot
+    AZNode *reuseSubtree(const Board &board, int player, AZNode *&previousRoot, int prevAction);
 
     // 扩展叶节点: 根据 policy 创建所有合法动作的子节点
     void expand(AZNode *node, const NetworkOutput &output);

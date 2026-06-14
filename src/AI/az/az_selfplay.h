@@ -2,6 +2,7 @@
 #include "../board.h"
 #include "az_types.h"
 #include "az_encoder.h"
+#include "az_node.h"
 #include <vector>
 #include <string>
 #include <array>
@@ -73,16 +74,18 @@ class SelfPlayEngine
 {
   public:
     // 运行 numGames 盘自对弈，将训练数据写入 outputDir
-    void run(int numGames, int numSimulations, const std::string &outputDir);
+    void run(int numGames, int numSimulations, const std::string &outputDir,
+             float temperature = 1.0f, int temperatureMoves = 20);
 
     // 反向训练模式：startSearchStep 之前用贪心启发式，之后用 MCTS
     // 仅收集 MCTS 搜索的步骤作为训练数据
     void runBackward(int numGames, int numSimulations,
-                     int startSearchStep, const std::string &outputDir);
+                     int startSearchStep, const std::string &outputDir,
+                     float temperature = 1.0f, int temperatureMoves = 10);
 
     // 进行一盘自对弈，样本追加到 samples 中
-    // temperature: 探索温度（前 temperatureMoves 步使用，之后贪心）
-    // temperatureMoves: 前多少步使用温度采样
+    // temperature: 探索温度（前 temperatureMoves 步使用渐进降温，之后趋近贪心）
+    // temperatureMoves: 温度采样的步数
     SelfPlayResult playOneGame(int numSimulations,
                                float temperature, int temperatureMoves,
                                std::vector<SelfPlaySample> &samples);
@@ -99,6 +102,21 @@ class SelfPlayEngine
     // 黑方 sims 倍数: 黑方搜索更深以补偿先手劣势
     void setBlackSimsMultiplier(float mult) { blackSimsMult = mult; }
 
+    // 黑方 evaluation 模式: 黑方用无噪声贪心搜索 (league vs 弱对手)
+    void setEvalBlack(bool eb) { evalBlack = eb; }
+
+    // 重置搜索树缓存（新对局开始时调用）
+    void resetSearchTree()
+    {
+        if (previousRoot)
+        {
+            deleteAZTree(previousRoot);
+            delete previousRoot;
+            previousRoot = nullptr;
+        }
+        prevAction = -1;
+    }
+
   private:
     // 将样本写入 JSONL 文件 (schema v2)
     void writeSamples(const std::string &filepath,
@@ -110,4 +128,7 @@ class SelfPlayEngine
     int gamesPlayed = 0;
     std::string teacherName = "heuristic";
     float blackSimsMult = 1.0f;
+    bool evalBlack = false;
+    AZNode *previousRoot = nullptr; // 上一步搜索的根节点（用于子树复用）
+    int prevAction = -1;            // 上一步选择的动作
 };

@@ -4,6 +4,27 @@ project(dots_and_boxes)
 # 设定语言标准
 set(CMAKE_CXX_STANDARD 17)
 
+# MinGW 兼容：ONNX Runtime C API 使用 MSVC SAL 注解宏
+if(MINGW)
+    add_compile_definitions(
+        _Frees_ptr_opt_=
+        _Frees_ptr_=
+        _In_
+        _Out_
+        _Inout_
+        _In_opt_
+        _Out_opt_
+        _In_reads_
+        _Out_writes_
+        _Inout_updates_
+        _Check_return_
+        __analysis_assume=
+        _Ret_notnull_=
+        _Ret_maybenull_=
+        _Null_terminated_=
+    )
+endif()
+
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 
 IF(WIN32)

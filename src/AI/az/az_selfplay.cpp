@@ -189,7 +189,8 @@ SelfPlayResult SelfPlayEngine::playOneGame(int numSimulations,
             continue;
         }
 
-        // 保存样本
+        // 保存样本 (schema v3: action_taken)
+        sample.actionTaken = action;
         samples.push_back(sample);
         decisionCount++;
 
@@ -227,6 +228,9 @@ SelfPlayResult SelfPlayEngine::playOneGame(int numSimulations,
         samples[i].blackScoreFinal = blackFinal;
         samples[i].whiteScoreFinal = whiteFinal;
         samples[i].winner = winner;
+        // schema v3: done 标识 (最后一个决策点 = 终局)
+        samples[i].done = (i == sampleEnd - 1);
+        // schema v3: action_taken (从 sample.actionTaken 转移, 防止后续 sample 复用)
 
         // value: +1/-1/0 胜负
         if (winner == 0)
@@ -447,6 +451,8 @@ SelfPlayResult SelfPlayEngine::playOneGameBackward(int numSimulations,
                 continue;
             }
 
+            // schema v3: action_taken
+            sample.actionTaken = action;
             samples.push_back(sample);
             decisionCount++;
 
@@ -476,6 +482,9 @@ SelfPlayResult SelfPlayEngine::playOneGameBackward(int numSimulations,
         samples[i].blackScoreFinal = blackFinal;
         samples[i].whiteScoreFinal = whiteFinal;
         samples[i].winner = winner;
+        // schema v3: done 标识 (最后一个决策点 = 终局)
+        samples[i].done = (i == sampleEnd - 1);
+        // schema v3: action_taken (从 sample.actionTaken 转移, 防止后续 sample 复用)
 
         if (winner == 0)
             samples[i].value = 0.0f;
@@ -571,6 +580,10 @@ void SelfPlayEngine::writeSamples(const std::string &filepath,
         file << ",\"root_policy_entropy\":" << std::fixed << std::setprecision(4) << s.rootEntropy;
         file << ",\"root_policy_confidence\":" << std::fixed << std::setprecision(4) << s.rootConfidence;
         file << ",\"root_q\":" << std::fixed << std::setprecision(4) << s.rootQ;
+
+        // schema v3: PPO 必需字段
+        file << ",\"action_taken\":" << s.actionTaken;
+        file << ",\"done\":" << (s.done ? "true" : "false");
 
         file << "}\n";
     }

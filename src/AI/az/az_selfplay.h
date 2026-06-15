@@ -59,6 +59,10 @@ struct SelfPlaySample
     float rootEntropy = 0.0f;                        // 根节点 policy 熵
     float rootConfidence = 0.0f;                     // 根节点 policy 置信度
     float rootQ = 0.0f;                              // MCTS 根节点 Q 值 (当前玩家视角)
+
+    // schema v3 字段 (PPO 用)
+    int actionTaken = -1;                            // MCTS/启发式实际选走的动作 (visit-count argmax / 温度采样后)
+    bool done = false;                               // 是否为该 game 最后一个决策点 (终局)
 };
 
 struct SelfPlayResult

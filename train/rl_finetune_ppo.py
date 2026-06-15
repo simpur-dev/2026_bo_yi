@@ -341,13 +341,24 @@ def evaluate_vs_baseline(model, eval_exe, candidate_path, baseline_path,
     for key, pat in [
         ("a_wins", r"A wins:\s*(\d+)"),
         ("b_wins", r"B wins:\s*(\d+)"),
+        ("a_as_black_wins", r"A as BLACK wins:\s*(\d+)"),
+        ("a_as_white_wins", r"A as WHITE wins:\s*(\d+)"),
         ("a_b_margin", r"A-B margin:\s*(-?\d+\.?\d*)"),
+        ("avg_score_a", r"Avg score A:\s*(-?\d+\.?\d*)"),
+        ("avg_score_b", r"Avg score B:\s*(-?\d+\.?\d*)"),
+        ("a_winrate", r"A winrate:\s*(-?\d+\.?\d*)"),
         ("games", r"Games:\s*(\d+)"),
     ]:
         m = re.search(pat, out)
         if m:
             v = m.group(1)
             parsed[key] = float(v) if "." in v else int(v)
+    # evaluate_ai 的 gamesPerSide=games_arg, 默认 swap-color, 实际总局数 = 2*games
+    # 把 per-arg 计数转换成 total
+    if "games" in parsed and parsed["games"] and games:
+        # 实际 games 字段是 evaluate_ai 输出的 2*gamesPerSide (swap-color)
+        # 不动, 让 caller 知道是 total
+        pass
     return parsed
 
 
@@ -355,21 +366,23 @@ def evaluate_vs_baseline(model, eval_exe, candidate_path, baseline_path,
 
 class EarlyStopWithRollback:
     """
-    追踪最近 N 次 eval 的胜率, 若 < threshold 连续 K 次 → 触发回滚
+    追踪最近 N 次 eval 的 margin (A-B 净胜格), 若 < min_margin 连续 K 次 → 触发回滚
+    margin 是颜色对称的连续量 (5×5 期望 0, ≥+0.5 算稳定优势).
+    比 winrate 抗噪声, 与阶段 11 后晋级协议一致.
     """
 
-    def __init__(self, winrate_threshold=0.40, patience=3, history_size=10):
-        self.winrate_threshold = winrate_threshold
+    def __init__(self, min_margin=0.5, patience=3, history_size=10):
+        self.min_margin = min_margin
         self.patience = patience
         self.history = deque(maxlen=history_size)
         self.below_streak = 0
         self.triggered = False
 
-    def update(self, winrate):
-        if winrate is None:
+    def update(self, margin):
+        if margin is None:
             return False
-        self.history.append(winrate)
-        if winrate < self.winrate_threshold:
+        self.history.append(margin)
+        if margin < self.min_margin:
             self.below_streak += 1
         else:
             self.below_streak = 0
@@ -412,7 +425,8 @@ def main():
     parser.add_argument("--value-coef", type=float, default=VALUE_COEF)
     parser.add_argument("--rollout-max-samples", type=int, default=20000,
                         help="每次 selfplay 最多用多少样本 (0=全部)")
-    parser.add_argument("--rollback-winrate", type=float, default=0.40)
+    parser.add_argument("--rollback-min-margin", type=float, default=0.5,
+                        help="margin < 此值记为低于期望, 触发连续 K 次回滚 (与阶段 11 协议一致)")
     parser.add_argument("--rollback-patience", type=int, default=3)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", type=str, default=None,
@@ -466,7 +480,7 @@ def main():
     log(f"  lr:             {args.lr}")
     log(f"  eval-interval:  {args.eval_interval}")
     log(f"  eval-games:     {args.eval_games}")
-    log(f"  rollback:       winrate<{args.rollback_winrate} 连续 {args.rollback_patience} 次")
+    log(f"  rollback:       margin<{args.rollback_min_margin} 连续 {args.rollback_patience} 次")
     log(f"  seed:           {args.seed}")
     log("=" * 60)
 
@@ -486,7 +500,7 @@ def main():
         log(f"  Resumed from {args.resume}, start_iter={start_iter}")
 
     early_stop = EarlyStopWithRollback(
-        winrate_threshold=args.rollback_winrate,
+        min_margin=args.rollback_min_margin,
         patience=args.rollback_patience,
     )
 
@@ -548,13 +562,13 @@ def main():
         }, ckpt_path)
         log(f"  Saved checkpoint: {ckpt_path}")
 
-        # 5) 评估 vs baseline
+        # 5) 评估 vs baseline (默认 swap-color, evaluate_ai 内部跑 A黑+A白)
         if it % args.eval_interval == 0:
             log(f"  Evaluating candidate vs baseline ...")
             candidate_eval = os.path.join(ckpt_dir, f"eval_candidate_iter_{it:04d}.pt")
             parsed = evaluate_vs_baseline(
                 model, args.eval_exe, candidate_eval,
-                args.baseline_black,  # 用黑方 baseline 作对手
+                args.baseline_black,  # 同一份 baseline (单模型)
                 args.eval_games, args.sims, device,
             )
             if parsed is not None:
@@ -565,14 +579,15 @@ def main():
                 log(f"  Eval saved: {eval_path}")
                 a_wins = parsed.get("a_wins", 0) or 0
                 b_wins = parsed.get("b_wins", 0) or 0
-                games = parsed.get("games", 0) or 0
+                games = parsed.get("games", 0) or 0  # 实际 = 2*eval_games (swap-color)
+                margin = parsed.get("a_b_margin", 0) or 0
                 if games > 0:
                     winrate = a_wins / games
-                    margin = parsed.get("a_b_margin", 0) or 0
-                    log(f"  Winrate: {winrate:.1%}  margin: {margin:.2f}")
-                    if early_stop.update(winrate):
+                    log(f"  Winrate: {winrate:.1%}  A-B margin: {margin:+.2f}  "
+                        f"(games={games}, A_black={parsed.get('a_as_black_wins', '?')}, A_white={parsed.get('a_as_white_wins', '?')})")
+                    if early_stop.update(margin):
                         log(f"  ROLLBACK triggered (连续 {args.rollback_patience} 次 "
-                            f"winrate<{args.rollback_winrate})")
+                            f"margin<{args.rollback_min_margin})")
                         log(f"  恢复到 baseline 权重, 停止训练")
                         load_baseline(model, args.baseline_black, device)
                         break
@@ -611,94 +626,129 @@ def load_iter_samples(iter_rollout_dir, max_samples=0):
 
 def build_ppo_batch(model, samples, device):
     """
-    把 selfplay 样本转成 PPO 训练 batch
+    把 selfplay 样本转成 PPO 训练 batch (schema v3)
     关键: 在当前 (old) policy 下重新算 log_prob, 用于 ratio
-    Returns: dict of tensors on CPU
+
+    schema v3 要求 samples 含 action_taken / done / winner / player:
+      - action_taken: MCTS/温度采样后实际走的动作
+      - done: bool, 是否为该 game 最后一个决策点
+      - winner: 1=BLACK赢, -1=WHITE赢, 0=平局
+      - player: 当前决策玩家 (1=BLACK, -1=WHITE)
+
+    per-step reward: 只有 done=True 的步 reward = winner*player (per-player ±1),
+                    其余步 reward = 0; bootstrap V 用 0 (episodic PPO).
+    按 game_id 分 episode, compute_gae 算 per-episode advantage, 最后归一化.
     """
-    model.eval()
-    boards, legal_masks, actions, old_log_probs, advantages, returns_, values = \
-        [], [], [], [], [], [], []
-
-    # 按 (game_id, move_index) 排序, 以便做 GAE
-    samples_sorted = sorted(samples, key=lambda s: (
-        s.get("game_id", 0), s.get("move_index", 0)
-    ))
-
-    with torch.no_grad():
-        # 收集 V(s) 用于 advantage
-        for s in samples_sorted:
-            try:
-                board = np.array(s["board"], dtype=np.float32).reshape(CHANNELS, BOARD_SIZE, BOARD_SIZE)
-            except (KeyError, ValueError):
-                continue
+    # 1) 过滤 + 解码 samples 为 (board, legal, action, player, done, winner) 元组
+    valid = []
+    gid_order = []
+    for s in samples:
+        if "action_taken" not in s or "done" not in s:
+            continue
+        try:
+            board = np.array(s["board"], dtype=np.float32).reshape(CHANNELS, BOARD_SIZE, BOARD_SIZE)
             if board.size != CHANNELS * BOARD_SIZE * BOARD_SIZE:
                 continue
-            try:
-                legal = np.array(s["legal_mask"], dtype=np.float32)
-                if legal.size != ACTION_SIZE:
-                    continue
-            except (KeyError, ValueError):
+            legal = np.array(s["legal_mask"], dtype=np.float32)
+            if legal.size != ACTION_SIZE:
                 continue
-            try:
-                policy = np.array(s["policy"], dtype=np.float32)
-                if policy.size != ACTION_SIZE:
-                    continue
-            except (KeyError, ValueError):
+            action = int(s["action_taken"])
+            if action < 0 or action >= ACTION_SIZE or legal[action] < 0.5:
                 continue
-
-            action = int(np.argmax(policy))  # 用 expert policy 的 top-1 当作 action
-            if legal[action] < 0.5:
-                # 找一个合法的最大概率动作
-                masked = policy * legal
-                if masked.sum() < 1e-6:
-                    continue
-                action = int(np.argmax(masked))
-            if legal[action] < 0.5:
+            player = int(s.get("player", 1))
+            if player not in (1, -1):
                 continue
-
-            reward = float(s.get("value", 0.0))
             done = bool(s.get("done", False))
-            # 注: 简化的 PPO, 把 value 当 reward, done=True 时后续 advantage 截断
-            # (具体 GAE 在 build_advantages_from_samples 内部处理)
+            winner = int(s.get("winner", 0))
+            valid.append((board, legal, action, player, done, winner))
+            gid_order.append((s.get("game_id", "?"), s.get("move_index", 0)))
+        except (KeyError, ValueError, TypeError):
+            continue
 
-            boards.append(board)
-            legal_masks.append(legal)
-            actions.append(action)
-            rewards = [reward]
-            values.append(0.0)  # 占位, 实际 GAE 用 reward 简化
-            dones = [done]
-
-            # 计算 log_prob under current policy
-            board_t = torch.from_numpy(board).unsqueeze(0).to(device)
-            legal_t = torch.from_numpy(legal).unsqueeze(0).to(device)
-            policy_logits, value_pred = model(board_t)
-            log_probs = masked_logits_to_log_probs(policy_logits, legal_t)
-            old_lp = log_probs[0, action].item()
-
-            old_log_probs.append(old_lp)
-            values[-1] = float(value_pred.item())
-            advantages.append(0.0)  # 占位
-            returns_.append(reward)
-
-    if len(boards) < 32:
+    if len(valid) < 32:
         return None
 
-    # 简化 advantage: 用 value_pred 的 baseline (用模型对每个 state 的估值) 算 advantage
-    # 完整 PPO 需要按 episode 分组做 GAE, 这里用全局 mean baseline (一阶近似)
-    adv = np.array(returns_, dtype=np.float32) - np.array(values, dtype=np.float32)
+    # 2) 一次性算 log_prob(π_old) 和 V(s)
+    boards_arr = np.stack([v[0] for v in valid])
+    legals_arr = np.stack([v[1] for v in valid])
+    actions_arr = np.array([v[2] for v in valid], dtype=np.int64)
+
+    model.eval()
+    with torch.no_grad():
+        b_t = torch.from_numpy(boards_arr).to(device)
+        l_t = torch.from_numpy(legals_arr).to(device)
+        BATCH = 256
+        all_lp, all_v = [], []
+        for i in range(0, len(valid), BATCH):
+            pl, vv = model(b_t[i:i + BATCH])
+            lp = masked_logits_to_log_probs(pl, l_t[i:i + BATCH])
+            all_lp.append(lp.cpu().numpy())
+            all_v.append(vv.squeeze(-1).cpu().numpy())
+        all_lp = np.concatenate(all_lp, axis=0)
+        all_v = np.concatenate(all_v, axis=0)
+
+    old_log_probs_arr = all_lp[np.arange(len(valid)), actions_arr].astype(np.float32)
+    values_arr = all_v.astype(np.float32)
+
+    # 3) 按 (game_id, move_index) 排序 → 切 episodes (碰到 done=True 切)
+    order = sorted(range(len(valid)), key=lambda i: (gid_order[i][0], gid_order[i][1]))
+    episodes = []
+    current_ep = []
+    for idx in order:
+        board, legal, action, player, done, winner = valid[idx]
+        current_ep.append({
+            "board": board, "legal": legal, "action": action,
+            "player": player, "done": done, "winner": winner,
+            "old_lp": float(old_log_probs_arr[idx]),
+            "value": float(values_arr[idx]),
+        })
+        if done:
+            episodes.append(current_ep)
+            current_ep = []
+    if current_ep:
+        episodes.append(current_ep)
+
+    # 4) 对每个 episode 算 GAE
+    out_boards, out_legals, out_actions, out_old_lp, out_adv, out_ret = [], [], [], [], [], []
+    for ep in episodes:
+        T = len(ep)
+        if T == 0:
+            continue
+        rewards = [0.0] * T
+        dones = [False] * T
+        for t, step in enumerate(ep):
+            dones[t] = step["done"]
+            if step["done"]:
+                w = step["winner"]
+                if w != 0:
+                    rewards[t] = float(w * step["player"])
+        values = [step["value"] for step in ep]
+        advs, rets = compute_gae(rewards, values, dones)
+        for step, a, r in zip(ep, advs, rets):
+            out_boards.append(step["board"])
+            out_legals.append(step["legal"])
+            out_actions.append(step["action"])
+            out_old_lp.append(step["old_lp"])
+            out_adv.append(a)
+            out_ret.append(r)
+
+    if len(out_boards) < 32:
+        return None
+
+    # 5) 归一化 advantage
+    adv = np.array(out_adv, dtype=np.float32)
     adv_mean = adv.mean()
     adv_std = adv.std() + 1e-6
     adv = (adv - adv_mean) / adv_std
-    # 截断极值
-    adv = np.clip(adv, -5.0, 5.0)
+    adv = np.clip(adv, -5.0, 5.0).astype(np.float32)
 
     return {
-        "board": torch.from_numpy(np.stack(boards)),
-        "legal_mask": torch.from_numpy(np.stack(legal_masks)),
-        "action": torch.tensor(actions, dtype=torch.long),
-        "old_log_prob": torch.tensor(old_log_probs, dtype=torch.float32),
-        "advantage": torch.tensor(adv, dtype=torch.float32),
-        "return_": torch.tensor(returns_, dtype=torch.float32),
+        "board": torch.from_numpy(np.stack(out_boards)),
+        "legal_mask": torch.from_numpy(np.stack(out_legals)),
+        "action": torch.tensor(out_actions, dtype=torch.long),
+        "old_log_prob": torch.tensor(out_old_lp, dtype=torch.float32),
+        "advantage": torch.from_numpy(adv),
+        "return_": torch.tensor(out_ret, dtype=torch.float32),
     }
 
 
